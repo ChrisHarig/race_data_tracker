@@ -1,7 +1,9 @@
-#!/usr/bin/env python3
+import os
 import time
 from enum import Enum
-from reporting import print_summary, generate_pdf_report
+import json
+import keyboard
+#from reporting import print_summary, generate_pdf_report
 
 class Stroke(Enum):
     FREESTYLE = "freestyle"
@@ -23,14 +25,13 @@ class Distance(Enum):
     D1000 = 1000
     D1650 = 1650
 
-def record_race_events(stroke, record_fifteen=False):
+def record_race_events(stroke):
     """
     Record race events via keyboard clicks.
-    The very first Enter press starts the race (time zero).
+    The very first 'p' press starts the race (time zero).
     Each subsequent key press records events:
-    - Enter: records strokes
-    - l key: records turn events (alternates between turn_start and turn_end, 
-             with breakout automatically recorded after turn_end)
+    - k key: records strokes
+    - Enter key: records turn events (alternates between turn_start and turn_end)
     - p key: ends recording and records final time
     Returns a list of dictionaries with event times and types.
     """
@@ -38,199 +39,180 @@ def record_race_events(stroke, record_fifteen=False):
     turn_state = "start"  # Will alternate between "start" and "end"
     
     print("\nInstructions:")
-    print("- Press ENTER to record race start: ")
-    print("- Press ENTER for water entry (when head enters water): ")
-    print("- Press ENTER for breakouts (when head exits water)")
-    print("- Press ENTER for strokes")
-    print("- Press l for turn events  (press once for hands and once for pushoff on breaststroke or butterfly)")
-    print("- Press p for race finish")
+    print("- Press p to start the race: ")
+    print("- Press k for strokes")
+    print("- Press ENTER for turn events  (press once for hands and once for pushoff on breaststroke or butterfly)")
+    print("- Press p again for race finish")
     print()
 
-    input()
-    start_time = time.time()
-    events.append({"type": "start", "time": 0.0})
-    print("Race started!")
-    
-    # Record water entry (always second event)
-    input()
-    water_entry_time = time.time() - start_time
-    events.append({"type": "water_entry", "time": water_entry_time})
-    print(f"Recorded water entry at {water_entry_time:.2f} seconds")
-    
+    # Wait for 'p' to start race
     while True:
-        inp = input().strip()
+        event = keyboard.read_event(suppress=True)
+        if event.event_type == 'down' and event.name == 'p':
+            start_time = time.time()
+            events.append({"type": "start", "time": 0.0})
+            print("Race started!")
+            break
+
+    while True:
+        event = keyboard.read_event(suppress=True)
+        if event.event_type != 'down':  # Only process key down events
+            continue
+            
         event_time = time.time() - start_time
         
-        if inp == "":  # Enter key
+        if event.name == "k":  # k key for strokes
             events.append({"type": "stroke", "time": event_time})
             print(f"Recorded stroke at {event_time:.2f} seconds")
-        elif inp == "l":
-            if stroke in [Stroke.FREESTYLE, Stroke.BACKSTROKE]:
-                # For freestyle and backstroke, only one turn event
-                events.append({"type": "turn_end", "time": event_time})
-                print(f"Recorded turn end at {event_time:.2f} seconds")
-                # Automatically record breakout after turn
-                breakout_time = time.time() - start_time
-                events.append({"type": "breakout", "time": breakout_time})
-                print(f"Recorded breakout at {breakout_time:.2f} seconds")
-            else:
-                # For other strokes, alternate between start and end
-                events.append({"type": f"turn_{turn_state}", "time": event_time})
-                print(f"Recorded turn {turn_state} at {event_time:.2f} seconds")
-                if turn_state == "end":
-                    # Automatically record breakout after turn_end
-                    breakout_time = time.time() - start_time
-                    events.append({"type": "breakout", "time": breakout_time})
-                    print(f"Recorded breakout at {breakout_time:.2f} seconds")
-                turn_state = "end" if turn_state == "start" else "start"  # Toggle state
-        elif inp == "p":
+        elif event.name == "enter":  # Enter key for turns
+            events.append({"type": f"turn_{turn_state}", "time": event_time})
+            print(f"Recorded turn {turn_state} at {event_time:.2f} seconds")
+            turn_state = "end" if turn_state == "start" else "start"  # Toggle state
+        elif event.name == "p":
             events.append({"type": "end", "time": event_time})
             print(f"Recorded final time at {event_time:.2f} seconds")
             break
-        else:
-            print("Invalid input. Press Enter for strokes, l for turns, p to end.")
-            continue
-            
+
     print(f"Race recording completed. Total events recorded: {len(events)}")
     return events
 
-def compute_underwater_times(breakouts, turn_ends, race_start_time=0.0, water_entry_time=0.0):
+def manual_entry(swimmer, race_details, session):
     """
-    Compute underwater times based on breakout events.
-    For the first breakout, underwater time = breakout time - water entry time.
-    For subsequent breakouts, underwater time = breakout time - previous turn end.
-    """
-    underwater_times = []
-    for i, breakout in enumerate(breakouts):
-        if i == 0:
-            lap_start = water_entry_time
-        elif i - 1 < len(turn_ends):
-            lap_start = turn_ends[i - 1]["time"]
-        else:
-            lap_start = breakout["time"]
-        underwater_times.append(breakout["time"] - lap_start)
-    return underwater_times
-
-def process_events(raw_events):
-    """
-    Process raw events and compute all relevant statistics.
+    Manually enter breakout times, distances, and 15m times for each lap.
     """
     data = {}
+    data["breakouts"] = []
+    data["fifteen_times"] = []
     
-    # Extract key events
-    start_event = next((e for e in raw_events if e["type"] == "start"), None)
-    end_event = next((e for e in raw_events if e["type"] == "end"), None)
-    water_entry_event = next((e for e in raw_events if e["type"] == "water_entry"), None)
+    # Calculate number of laps based on race distance
+    num_laps = race_details['distance'].value // 25  # Integer division by pool length
     
-    if not start_event or not end_event:
-        raise ValueError("Missing start or end event.")
+    print(f"\nEntering data for {num_laps} laps:")
     
-    race_start_time = start_event["time"]
-    race_end_time = end_event["time"]
-    data["total_time"] = race_end_time
-    data["water_entry_time"] = water_entry_event["time"] if water_entry_event else None
+    for lap in range(num_laps):
+        print(f"\nLap {lap + 1}:")
+        try:
+            breakout_time = float(input(f"Enter breakout time for lap {lap + 1} (seconds): ").strip())
+            breakout_distance = float(input(f"Enter breakout distance for lap {lap + 1} (meters): ").strip())
+            data["breakouts"].append({"time": breakout_time, "distance": breakout_distance})
+            
+            fifteen_time = float(input(f"Enter 15m time for lap {lap + 1} (seconds): ").strip())
+            data["fifteen_times"].append(fifteen_time)
+        except ValueError:
+            print("Invalid input. Please enter numeric values.")
+            # Reset to start of current lap
+            if len(data["breakouts"]) > lap:
+                data["breakouts"].pop()
+            if len(data["fifteen_times"]) > lap:
+                data["fifteen_times"].pop()
+            lap -= 1
+            continue
 
-    # Breakout events
-    breakouts = [e for e in raw_events if e["type"] == "breakout"]
-    data["breakouts"] = breakouts
-    if breakouts:
-        data["avg_breakout_distance"] = sum(b.get("extra", {}).get("distance", 0.0) for b in breakouts) / len(breakouts)
-        data["avg_breakout_time"] = sum(b["time"] for b in breakouts) / len(breakouts)
-    else:
-        data["avg_breakout_distance"] = None
-        data["avg_breakout_time"] = None
+    save_data(swimmer, race_details, session, data)
 
-    # Turn events
-    turn_starts = [e for e in raw_events if e["type"] == "turn_start"]
-    turn_ends = [e for e in raw_events if e["type"] == "turn_end"]
-    data["turn_starts"] = turn_starts
-    data["turn_ends"] = turn_ends
-    if turn_starts and turn_ends and (len(turn_starts) == len(turn_ends)):
-        turn_times = [te["time"] - ts["time"] for ts, te in zip(turn_starts, turn_ends)]
-        data["turn_times"] = turn_times
-        data["avg_turn_time"] = sum(turn_times) / len(turn_times)
-    else:
-        data["turn_times"] = []
-        data["avg_turn_time"] = None
-
-    # Stroke events - use events encoded as "stroke"
-    strokes = [e for e in raw_events if e["type"] == "stroke"]
-    data["strokes"] = strokes
-    if len(strokes) > 1:
-        stroke_intervals = [strokes[i]["time"] - strokes[i-1]["time"] for i in range(1, len(strokes))]
-        data["stroke_intervals"] = stroke_intervals
-        data["avg_stroke_interval"] = sum(stroke_intervals) / len(stroke_intervals)
-    else:
-        data["stroke_intervals"] = []
-        data["avg_stroke_interval"] = None
-
-    # Underwater times based on breakouts and turn events
-    data["underwater_times"] = compute_underwater_times(breakouts, turn_ends, race_start_time)
-    if data["underwater_times"]:
-        data["avg_underwater_time"] = sum(data["underwater_times"]) / len(data["underwater_times"])
-    else:
-        data["avg_underwater_time"] = None
-
-    # Optionally, record 15m event if present in events
-    fifteen_event = next((e for e in raw_events if e["type"] == "fifteen"), None)
-    data["fifteen_time"] = fifteen_event["time"] if fifteen_event else None
-    
-    return data
-
-def parse_race_details(race_details):
+def save_data(swimmer, race_details, session, data):
     """
-    Parse race details string in format "Gender's Distance Stroke"
-    e.g. "Men's 50 Freestyle" or "Women's 200 Breaststroke"
-    Returns dictionary with gender, distance, and stroke
+    Save race data to a JSON file in the appropriate directory.
     """
-    try:
-        # Split into parts and clean up
-        parts = race_details.strip().split()
-        
-        # Get gender (remove 's)
-        gender_str = parts[0].lower().replace("'s", "")
-        gender = Gender(gender_str)
-        
-        # Get distance (should be a number)
-        distance = int(parts[1])
-        distance_enum = Distance(f"D{distance}")
-        
-        # Get stroke (rest of the string)
-        stroke_str = " ".join(parts[2:]).lower()
-        stroke = Stroke(stroke_str)
-        # Print successful parsing details
-        print(f"Successfully parsed race details:")
-        print(f"  Gender: {gender.value}")
-        print(f"  Distance: {distance}m")
-        print(f"  Stroke: {stroke.value}")
-        return {
-            "gender": gender,
-            "distance": distance_enum,
-            "stroke": stroke
-        }
-    except Exception as e:
-        raise ValueError(f"Invalid race details format. Expected 'Gender's Distance Stroke'. Error: {str(e)}")
+    directory = os.path.join("data", session)
+    os.makedirs(directory, exist_ok=True)
+    filename = f"{swimmer.replace(' ', '_')}_{race_details['gender'].value}_{race_details['distance'].value}_{race_details['stroke'].value}.json"
+    filepath = os.path.join(directory, filename)
+    
+    with open(filepath, 'w') as f:
+        json.dump(data, f, indent=4)
+    print(f"Data saved to {filepath}")
+
+def parse_race_details():
+    """
+    Prompt user for race details and return a dictionary with gender, distance, and stroke.
+    """
+    print("\nPlease enter race details:")
+    
+    # Get gender
+    gender_input = input("Select gender (1 for Men's, 2 for Women's): ").strip()
+    gender = Gender.MEN if gender_input == "1" else Gender.WOMEN
+    
+    # Get distance
+    print("Select distance:")
+    print("1. 50m")
+    print("2. 100m")
+    print("3. 200m")
+    print("4. 400m")
+    print("5. 500m")
+    print("6. 1000m")
+    print("7. 1650m")
+    distance_input = input("Enter choice (1-7): ").strip()
+    distance_map = {
+        "1": Distance.D50,
+        "2": Distance.D100,
+        "3": Distance.D200,
+        "4": Distance.D400,
+        "5": Distance.D500,
+        "6": Distance.D1000,
+        "7": Distance.D1650
+    }
+    distance = distance_map.get(distance_input, Distance.D50)
+    
+    # Get stroke
+    print("Select stroke:")
+    print("1. Butterfly")
+    print("2. Backstroke") 
+    print("3. Breaststroke")
+    print("4. Freestyle")
+    print("5. IM")
+    stroke_input = input("Enter choice (1-5): ").strip()
+    stroke_map = {
+        "1": Stroke.BUTTERFLY,
+        "2": Stroke.BACKSTROKE,
+        "3": Stroke.BREASTSTROKE,
+        "4": Stroke.FREESTYLE,
+        "5": Stroke.IM
+    }
+    stroke = stroke_map.get(stroke_input, Stroke.FREESTYLE)
+    
+    return {
+        "gender": gender,
+        "distance": distance,
+        "stroke": stroke
+    }
 
 def main():
-    # Ask for swimmer name and race details
+    # Ask for swimmer name
     swimmer = input("Enter swimmer's name: ").strip()
-    race_details_input = input("Enter race details (e.g. Men's 50 Freestyle): ").strip()
     
-    race_details = parse_race_details(race_details_input)
+    # Get race details
+    race_details = parse_race_details()
 
-    # Ask if user wants to record 15m marks during the race
-    record_fifteen = input("Do you want to record 15m marks during the race? (y/n): ").strip().lower() == 'y'
+    # Ask if user wants to record a race or manually enter data
+    print("\nPlease select an option:")
+    print("1. Record a Race")
+    print("2. Enter breakout and 15 meter data")
+    action = input("Enter choice (1 or 2): ").strip()
+    action = "record" if action == "1" else "manual"
+    
+    session = input("Is this for prelims or finals? (prelims/finals): ").strip().lower()
 
-    # --- Phase 1: Race Event Recording ---
-    print("\n== Race Event Recording ==")
-    raw_events = record_race_events(race_details['stroke'], record_fifteen)
+    if action == "record":
+        print("\n--- Race Event Recording ---")
+        raw_events = record_race_events(race_details['stroke'])
+        save_data(swimmer, race_details, session, {"events": raw_events})
+    elif action == "manual":
+        print("\n--- Manual Data Entry ---")
+        manual_entry(swimmer, race_details, session)
+    else:
+        print("Invalid action. Please enter 'record' or 'manual'.")
 
-    # Extract all relevant statistics from raw_events
-    data = process_events(raw_events)
-
-    # Print the summary and generate the PDF report
-    print_summary(swimmer, race_details, data)
-    generate_pdf_report(swimmer, race_details, data)
+def test_process_events(data):
+    """
+    Print the processed event data for testing/debugging purposes.
+    
+    Args:
+        data: Dictionary containing processed event data from process_events()
+    """
+    print("\nProcessed Event Data:")
+    for key, value in data.items():
+        print(f"{key}: {value}")
 
 if __name__ == "__main__":
     main()
