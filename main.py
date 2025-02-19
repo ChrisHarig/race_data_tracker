@@ -3,7 +3,6 @@ import time
 from enum import Enum
 import pandas as pd
 import keyboard
-#from reporting import print_summary, generate_pdf_report
 
 class Stroke(Enum):
     FREESTYLE = "freestyle"
@@ -29,7 +28,7 @@ class Session(Enum):
     PRELIMS = "prelims"
     FINALS = "finals"
 
-def record_race_strokes_and_turns(swimmer, race_details, session, stroke):
+def record_race_strokes_and_turns(race_details, base_directory):
     """
     Record race events via keyboard clicks.
     The very first 'p' press starts the race (time zero).
@@ -40,7 +39,7 @@ def record_race_strokes_and_turns(swimmer, race_details, session, stroke):
     Returns a list of dictionaries with event times and types.
     """
     # Check if file exists and request overwrite confirmation
-    directory, filename, filepath = make_file_info(swimmer, race_details, session)
+    directory, filename, filepath = make_file_info(race_details, "stroke_and_turn", base_directory)
     
     if os.path.exists(filepath):
         confirm = input(f"File {filename} already exists. Overwrite? (y/n): ").strip().lower()
@@ -49,12 +48,14 @@ def record_race_strokes_and_turns(swimmer, race_details, session, stroke):
             return
     
     events = []
-    turn_state = "start"  # Will alternate between "start" and "end"
+
+    # Always turn_end if freestyle or backstroke, otherwise turn_start
+    turn_state = "start" if race_details['stroke'] == Stroke.BREASTSTROKE or race_details['stroke'] == Stroke.BUTTERFLY else "end"  
     
     print("\nInstructions:")
     print("- Press p to start the race: ")
     print("- Press k for strokes")
-    print("- Press ENTER for turn events  (press once for hands and once for pushoff on breaststroke or butterfly)")
+    print("- Press ENTER for turn events (press once for hands and once for pushoff on breaststroke or butterfly)")
     print("- Press p again for race finish")
     print()
 
@@ -80,24 +81,25 @@ def record_race_strokes_and_turns(swimmer, race_details, session, stroke):
         elif event.name == "enter":  # Enter key for turns
             events.append({"type": f"turn_{turn_state}", "time": event_time})
             print(f"Recorded turn {turn_state} at {event_time:.2f} seconds")
-            turn_state = "end" if turn_state == "start" else "start"  # Toggle state
-        elif event.name == "p":
+            if race_details['stroke'] == Stroke.BREASTSTROKE or race_details['stroke'] == Stroke.BUTTERFLY:
+                turn_state = "end" if turn_state == "start" else "start"  # Toggle state if fly or breast
+        elif event.name == "p": # p for race end
             events.append({"type": "end", "time": event_time})
             print(f"Recorded final time at {event_time:.2f} seconds")
             break
 
     print(f"Race recording completed. Total events recorded: {len(events)}")
     
-    save_data(swimmer, race_details, session, {"events": events}, data_type="stroke_and_turn")
+    save_data(events, filepath)
     return events
 
-def enter_break_and_fifteen_data(swimmer, race_details, session):
+def enter_break_and_fifteen_data(race_details, base_directory):
     """
     Manually enter breakout times, distances, and 15m times for each lap.
     """
 
     # Check if file exists and request overwrite confirmation
-    directory, filename, filepath = make_file_info(swimmer, race_details, session, data_type="break_and_fifteen")
+    directory, filename, filepath = make_file_info(race_details, "break_and_fifteen", base_directory)
     
     if os.path.exists(filepath):
         confirm = input(f"File {filename} already exists. Overwrite? (y/n): ").strip().lower()
@@ -139,48 +141,38 @@ def enter_break_and_fifteen_data(swimmer, race_details, session):
             continue
 
     print("\nBreakout and 15m data recorded successfully.")
-    save_data(swimmer, race_details, session, data, data_type="break_and_fifteen")
+    save_data(data, filepath)
 
-def save_data(swimmer, race_details, session, data, data_type):
+def save_data(data, filepath):
     """
     Save race data to a CSV file in the appropriate directory based on data type.
     """
-    # Check if file exists and confirm overwrite
-    directory, filename, filepath = make_file_info(swimmer, race_details, session, data_type)
-    
-    if os.path.exists(filepath):
-        confirm = input(f"File {filename} already exists. Overwrite? (y/n): ").strip().lower()
-        if confirm != 'y':
-            print("Operation cancelled.")
-            return
-    
-    # Save as CSV
+    # Already asked user for confirmation of overwrite if file exists, so just save file
     df = pd.DataFrame(data)
     df.to_csv(filepath, index=False)
     print(f"Data saved to {filepath}")
 
-def make_file_info(swimmer, race_details, session, data_type):
+def make_file_info(race_details, data_type, base_directory):
     """
-    Create file information based on data type.
+    Create file information based on data type and user-defined base directory.
     """
-    if data_type == "stroke_and_turn":
-        directory = os.path.join("data", "stroke_and_turn_data", session.value)
-    elif data_type == "break_and_fifteen":
-        directory = os.path.join("data", "15_and_break_data", session.value)
-    else:
-        directory = os.path.join("data", session.value)
+    # Construct the directory path based on user input and data type
+    directory = os.path.join(base_directory, data_type, race_details['session'].value)
     
     os.makedirs(directory, exist_ok=True)
-    filename = f"{swimmer.replace(' ', '_')}_{race_details['gender'].value}_{race_details['distance'].value}_{race_details['stroke'].value}.csv"
+    filename = f"{race_details['swimmer_name'].replace(' ', '_')}_{race_details['gender'].value}_{race_details['distance'].value}_{race_details['stroke'].value}.csv"
     filepath = os.path.join(directory, filename)
 
     return (directory, filename, filepath)
 
 def parse_race_details():
     """
-    Prompt user for race details and return a dictionary with gender, distance, stroke, and session.
+    Prompt user for race details and return a dictionary with swimmer's name, gender, distance, stroke, and session.
     """
     print("\nPlease enter race details:")
+    
+    # Ask for swimmer name
+    swimmer_name = input("Enter swimmer's name: ").strip()
     
     gender_input = input("Select gender (m/f): ").strip().lower()
     gender = Gender.MEN if gender_input == "m" else Gender.WOMEN
@@ -228,6 +220,7 @@ def parse_race_details():
     stroke = stroke_map.get(stroke_input, Stroke.FREESTYLE)
     
     return {
+        "swimmer_name": swimmer_name,
         "gender": gender,
         "distance": distance,
         "stroke": stroke,
@@ -235,12 +228,6 @@ def parse_race_details():
     }
 
 def main():
-    # Ask for swimmer name
-    swimmer = input("Enter swimmer's name: ").strip()
-    
-    # Get race details
-    race_details = parse_race_details()
-
     # Ask if user wants to record a race or manually enter data
     print("\nPlease select an option:")
     print("1. Record a Race")
@@ -248,12 +235,19 @@ def main():
     action = input("Enter choice (1 or 2): ").strip()
     action = "record" if action == "1" else "manual"
     
+    # Get race details
+    race_details = parse_race_details()
+    
+    # Ask for base directory
+    base_directory = input("Enter the base directory for saving data (e.g., 'user_dir_1/user_sub_dir_1'/...): ").strip()
+    base_directory = os.path.join("data", base_directory)
+    
     if action == "record":
         print("\n--- Race Event Recording ---")
-        record_race_strokes_and_turns(swimmer, race_details, race_details['session'], race_details['stroke'])
+        record_race_strokes_and_turns(race_details, base_directory)
     elif action == "manual":
         print("\n--- Manual Data Entry ---")
-        enter_break_and_fifteen_data(swimmer, race_details, race_details['session'])
+        enter_break_and_fifteen_data(race_details, base_directory)
     else:
         print("Invalid action. Please enter 'record' or 'manual'.")
 
