@@ -3,6 +3,7 @@ import time
 from enum import Enum
 import pandas as pd
 import keyboard
+import reporting
 
 class Stroke(Enum):
     FREESTYLE = "freestyle"
@@ -227,13 +228,19 @@ def parse_race_details():
         "session": session
     }
 
+def generate_report(race_details, base_directory):
+    """
+    Generate a report for the given race details.
+    """
+    reporting.run(race_details, base_directory)
+
 def main():
-    # Ask if user wants to record a race or manually enter data
+    # Ask if user wants to record a race, manually enter data, or generate a report
     print("\nPlease select an option:")
     print("1. Record a Race")
     print("2. Enter breakout and 15 meter data")
-    action = input("Enter choice (1 or 2): ").strip()
-    action = "record" if action == "1" else "manual"
+    print("3. Generate a Report")
+    action = input("Enter choice (1, 2, or 3): ").strip()
     
     # Get race details
     race_details = parse_race_details()
@@ -248,8 +255,11 @@ def main():
     elif action == "manual":
         print("\n--- Manual Data Entry ---")
         enter_break_and_fifteen_data(race_details, base_directory)
+    elif action == "generate":
+        print("\n--- Generating Report ---")
+        generate_report(race_details, base_directory)
     else:
-        print("Invalid action. Please enter 'record' or 'manual'.")
+        print("Invalid action. Please enter '1', '2', or '3'.")
 
 if __name__ == "__main__":
     main()
