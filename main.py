@@ -34,6 +34,7 @@ def record_race_strokes_and_turns(race_details, base_directory):
     Record race events via keyboard clicks.
     The very first 'p' press starts the race (time zero).
     Each subsequent key press records events:
+    - w key: records water entry
     - k key: records strokes
     - Enter key: records turn events (alternates between turn_start and turn_end)
     - p key: ends recording and records final time
@@ -55,6 +56,7 @@ def record_race_strokes_and_turns(race_details, base_directory):
     
     print("\nInstructions:")
     print("- Press p to start the race: ")
+    print("- Press w for water entry (required as second event)")
     print("- Press k for strokes")
     print("- Press ENTER for turn events (press once for hands and once for pushoff on breaststroke or butterfly)")
     print("- Press p again for race finish")
@@ -69,6 +71,18 @@ def record_race_strokes_and_turns(race_details, base_directory):
             print("Race started!")
             break
 
+    # Water entry is second event
+    while True:
+        event = keyboard.read_event(suppress=True)
+        if event.event_type == 'down' and event.name == 'w':
+            event_time = time.time() - start_time
+            events.append({"type": "water_entry", "time": event_time})
+            print(f"Recorded water entry at {event_time:.2f} seconds")
+            break
+        elif event.event_type == 'down':  # Ignore any other keys
+            print("Please record water entry first (press 'w')")
+
+    # Continue with rest of race events
     while True:
         event = keyboard.read_event(suppress=True)
         if event.event_type != 'down':  # Only process key down events
@@ -80,10 +94,24 @@ def record_race_strokes_and_turns(race_details, base_directory):
             events.append({"type": "stroke", "time": event_time})
             print(f"Recorded stroke at {event_time:.2f} seconds")
         elif event.name == "enter":  # Enter key for turns
-            events.append({"type": f"turn_{turn_state}", "time": event_time})
-            print(f"Recorded turn {turn_state} at {event_time:.2f} seconds")
-            if race_details['stroke'] == Stroke.BREASTSTROKE or race_details['stroke'] == Stroke.BUTTERFLY:
-                turn_state = "end" if turn_state == "start" else "start"  # Toggle state if fly or breast
+            if race_details['stroke'] == Stroke.IM:
+                # Check if last event was a turn
+                if events and events[-1]['type'] == "turn_end":
+                    # If we get another turn, mark the first as start and this as end
+                    events[-1]['type'] = "turn_start"
+                    events.append({"type": "turn_end", "time": event_time})
+                    print(f"Recorded turn sequence (start/end) ending at {event_time:.2f} seconds")
+                else:
+                    # Otherwise just record a turn_end
+                    events.append({"type": "turn_end", "time": event_time})
+                    print(f"Recorded turn end at {event_time:.2f} seconds")
+            elif race_details['stroke'] in [Stroke.BREASTSTROKE, Stroke.BUTTERFLY]:
+                events.append({"type": f"turn_{turn_state}", "time": event_time})
+                print(f"Recorded turn {turn_state} at {event_time:.2f} seconds")
+                turn_state = "end" if turn_state == "start" else "start"
+            else:  # Freestyle or Backstroke
+                events.append({"type": "turn_end", "time": event_time})
+                print(f"Recorded turn end at {event_time:.2f} seconds")
         elif event.name == "p": # p for race end
             events.append({"type": "end", "time": event_time})
             print(f"Recorded final time at {event_time:.2f} seconds")
@@ -98,7 +126,6 @@ def enter_break_and_fifteen_data(race_details, base_directory):
     """
     Manually enter breakout times, distances, and 15m times for each lap.
     """
-
     # Check if file exists and request overwrite confirmation
     directory, filename, filepath = make_file_info(race_details, "break_and_fifteen", base_directory)
     
@@ -173,25 +200,29 @@ def parse_race_details():
     print("\nPlease enter race details:")
     
     # Ask for swimmer name
-    swimmer_name = input("Enter swimmer's name: ").strip()
+    while True:
+        swimmer_name = input("Enter swimmer's name: ").strip()
+        if swimmer_name:  # Check if name is not empty
+            break
+        print("Please enter a valid name.")
     
-    gender_input = input("Select gender (m/f): ").strip().lower()
-    gender = Gender.MEN if gender_input == "m" else Gender.WOMEN
+    # Get gender
+    while True:
+        gender_input = input("Select gender (m/f): ").strip().lower()
+        if gender_input in ['m', 'f']:
+            gender = Gender.MEN if gender_input == "m" else Gender.WOMEN
+            break
+        print("Invalid input. Please enter 'm' for men or 'f' for women.")
     
-    session_input = input("Prelims or Finals? (p/f): ").strip().lower()
-    session = Session.PRELIMS if session_input == "p" else Session.FINALS
+    # Get session
+    while True:
+        session_input = input("Prelims or Finals? (p/f): ").strip().lower()
+        if session_input in ['p', 'f']:
+            session = Session.PRELIMS if session_input == "p" else Session.FINALS
+            break
+        print("Invalid input. Please enter 'p' for prelims or 'f' for finals.")
     
     # Get distance
-    print("Select distance:")
-    print("1. 50m")
-    print("2. 100m")
-    print("3. 200m")
-    print("4. 400m")
-    print("5. 500m")
-    print("6. 1000m")
-    print("7. 1650m")
-    distance_input = input("Enter choice (1-7): ").strip()
-
     distance_map = {
         "1": Distance.D50,
         "2": Distance.D100,
@@ -201,16 +232,24 @@ def parse_race_details():
         "6": Distance.D1000,
         "7": Distance.D1650
     }
-    distance = distance_map.get(distance_input, Distance.D50)
     
-    print("Select stroke:")
-    print("1. Butterfly")
-    print("2. Backstroke") 
-    print("3. Breaststroke")
-    print("4. Freestyle")
-    print("5. IM")
-    stroke_input = input("Enter choice (1-5): ").strip()
-
+    while True:
+        print("Select distance:")
+        print("1. 50m")
+        print("2. 100m")
+        print("3. 200m")
+        print("4. 400m")
+        print("5. 500m")
+        print("6. 1000m")
+        print("7. 1650m")
+        distance_input = input("Enter choice (1-7): ").strip()
+        
+        if distance_input in distance_map:
+            distance = distance_map[distance_input]
+            break
+        print("Invalid choice. Please enter a number between 1 and 7.")
+    
+    # Get stroke
     stroke_map = {
         "1": Stroke.BUTTERFLY,
         "2": Stroke.BACKSTROKE,
@@ -218,7 +257,20 @@ def parse_race_details():
         "4": Stroke.FREESTYLE,
         "5": Stroke.IM
     }
-    stroke = stroke_map.get(stroke_input, Stroke.FREESTYLE)
+    
+    while True:
+        print("Select stroke:")
+        print("1. Butterfly")
+        print("2. Backstroke") 
+        print("3. Breaststroke")
+        print("4. Freestyle")
+        print("5. IM")
+        stroke_input = input("Enter choice (1-5): ").strip()
+        
+        if stroke_input in stroke_map:
+            stroke = stroke_map[stroke_input]
+            break
+        print("Invalid choice. Please enter a number between 1 and 5.")
     
     return {
         "swimmer_name": swimmer_name,
@@ -235,31 +287,81 @@ def generate_report(race_details, base_directory):
     reporting.run(race_details, base_directory)
 
 def main():
-    # Ask if user wants to record a race, manually enter data, or generate a report
-    print("\nPlease select an option:")
-    print("1. Record a Race")
-    print("2. Enter breakout and 15 meter data")
-    print("3. Generate a Report")
-    action = input("Enter choice (1, 2, or 3): ").strip()
+    race_details = None
+    base_directory = None
     
-    # Get race details
-    race_details = parse_race_details()
-    
-    # Ask for base directory
-    base_directory = input("Enter the base directory for saving data (e.g., 'user_dir_1/user_sub_dir_1'/...): ").strip()
-    base_directory = os.path.join("data", base_directory)
-    
-    if action == "record":
-        print("\n--- Race Event Recording ---")
-        record_race_strokes_and_turns(race_details, base_directory)
-    elif action == "manual":
-        print("\n--- Manual Data Entry ---")
-        enter_break_and_fifteen_data(race_details, base_directory)
-    elif action == "generate":
-        print("\n--- Generating Report ---")
-        generate_report(race_details, base_directory)
-    else:
-        print("Invalid action. Please enter '1', '2', or '3'.")
+    while True:
+        # If we don't have race details from a previous run, get them
+        if not race_details:
+            print("\nPlease select an option:")
+            print("1. Record a Race")
+            print("2. Enter breakout and 15 meter data")
+            print("3. Generate a Report")
+            print("4. Exit")
+            action = input("Enter choice (1-4): ").strip()
+            
+            if action == "4":
+                print("Goodbye!")
+                break
+                
+            if action not in ["1", "2", "3"]:
+                print("Invalid choice. Please enter 1, 2, 3, or 4.")
+                continue
+            
+            try:
+                race_details = parse_race_details()
+                base_directory = input("Enter the base directory for saving data (e.g., 'user_dir_1/user_sub_dir_1'/...): ").strip()
+                base_directory = os.path.join("data", base_directory)
+            except ValueError as e:
+                print(f"Error: {e}")
+                continue
+        else:
+            # We have race details from before, ask if user wants to reuse them
+            print("\nPrevious race details:", 
+                  f"\nSwimmer: {race_details['swimmer_name']}"
+                  f"\nGender: {race_details['gender'].value}"
+                  f"\nDistance: {race_details['distance'].value}"
+                  f"\nStroke: {race_details['stroke'].value}"
+                  f"\nSession: {race_details['session'].value}")
+            
+            print("\nPlease select an option:")
+            print("1. Record a Race")
+            print("2. Enter breakout and 15 meter data")
+            print("3. Generate a Report")
+            print("4. Start new race details")
+            print("5. Exit")
+            action = input("Enter choice (1-5): ").strip()
+            
+            if action == "5":
+                print("Goodbye!")
+                break
+            
+            if action == "4":
+                race_details = None
+                continue
+                
+            if action not in ["1", "2", "3"]:
+                print("Invalid choice. Please enter 1, 2, 3, 4, or 5.")
+                continue
+        
+        try:
+            if action == "1":
+                print("\n--- Race Event Recording ---")
+                record_race_strokes_and_turns(race_details, base_directory)
+            elif action == "2":
+                print("\n--- Manual Data Entry ---")
+                enter_break_and_fifteen_data(race_details, base_directory)
+            elif action == "3":
+                print("\n--- Generating Report ---")
+                generate_report(race_details, base_directory)
+            
+            # After successful completion, ask what they want to do next
+            print("\nAction completed successfully!")
+            
+        except Exception as e:
+            print(f"\nError occurred: {str(e)}")
+            print("Returning to main menu...")
+            continue
 
 if __name__ == "__main__":
     main()
