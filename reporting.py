@@ -3,11 +3,13 @@ import pandas as pd
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
 from reportlab.lib import colors
-from reportlab.platypus import Table, TableStyle, SimpleDocTemplate, PageBreak, Spacer
+from reportlab.platypus import Table, TableStyle, SimpleDocTemplate, PageBreak, Spacer, Paragraph
+from reportlab.lib.styles import ParagraphStyle
 
 def calculate_per_lap_stats(data, race_details):
     """
     Calculate statistics for each lap from the event data and breakout/fifteen data.
+    All measurements are in yards for consistency.
     """
     stroke = race_details['stroke']
     distance = race_details['distance']
@@ -109,12 +111,34 @@ def calculate_per_lap_stats(data, race_details):
         # Add breakout and 15m data if available
         if all(x is not None for x in [breakout_data, breakout_distances, fifteen_times]):
             if lap < len(breakout_data):  # Check if we have data for this lap
+                # Find the most recent turn_end or start event
+                if lap == 0:
+                    # For first lap, use the start time (0.0)
+                    previous_turn_end = 0.0
+                else:
+                    # For subsequent laps, use the previous lap marker
+                    previous_turn_end = lap_markers[lap]
+                
+                # Calculate breakout time relative to the turn end
+                relative_breakout_time = breakout_data[lap] - previous_turn_end
+                
+                # Breakout distance is already in yards (user input)
+                breakout_yards = breakout_distances[lap]
+                
+                # Calculate underwater speed in yards per second
+                underwater_speed = breakout_yards / relative_breakout_time if relative_breakout_time > 0 else 0
+                
+                # Calculate breakout to 15m time
+                # Note: 15m mark is at 16.4042 yards but we keep the name "15m" for reference
+                breakout_to_fifteen = fifteen_times[lap] - breakout_data[lap]
+                
                 lap_stat.update({
-                    "Breakout Time": round(breakout_data[lap], 2),
-                    "Breakout Distance": round(breakout_distances[lap], 2),
-                    "Underwater Speed": round(breakout_distances[lap] / breakout_data[lap], 2),
-                    "Breakout to 15m Time": round(fifteen_times[lap] - breakout_data[lap], 2),
-                    "15m to Turn Time": round(lap_end - fifteen_times[lap], 2)
+                    "Breakout Time": round(relative_breakout_time, 2),  # Relative to turn end
+                    "Breakout Dist": round(breakout_yards, 2),          # Already in yards
+                    "UW Speed": round(underwater_speed, 2),             # Yards/sec
+                    "Break->15": round(breakout_to_fifteen, 2),
+                    "15->Turn": round(lap_end - fifteen_times[lap], 2),
+                    "Turn Time": round(lap_stat.get("Turn Time", 0), 2)
                 })
         
         lap_stats.append(lap_stat)
@@ -160,136 +184,186 @@ def calculate_overall_stats(lap_stats):
 
 def generate_pdf_report(lap_stats, overall_stats, filepath, race_details):
     """
-    Generate a PDF report with lap statistics split into two tables:
-    1. Stroke-related statistics
-    2. Turn/breakout/15m statistics
+    Generate a PDF report with all statistics in a single compact table.
+    All speeds and distances are in yards/second and yards respectively.
     """
     doc = SimpleDocTemplate(
         filepath, 
         pagesize=letter,
-        rightMargin=40,
-        leftMargin=40,
+        rightMargin=20,
+        leftMargin=20,  # Keep left margin small
         topMargin=40,
         bottomMargin=40
     )
     elements = []
     
-    # Get folder name from filepath
-    folder_name = os.path.basename(os.path.dirname(filepath))
+    # Get folder name from filepath - use the user-created directory
+    folder_parts = filepath.split(os.sep)
+    reports_index = folder_parts.index('reports')
+    user_folder = folder_parts[reports_index + 1]
     
-    # Title and Race Details
-    elements.append(canvas.Canvas(filepath).drawString(100, 750, "Race Statistics Report"))
+    # Format race details string more concisely
+    race_string = f"{race_details['gender'].value.capitalize()} {race_details['distance'].value}yd {race_details['stroke'].value.capitalize()} {race_details['session'].value.capitalize()}"
     
-    # Add race details table
-    race_info = [
-        ["Swimmer:", race_details['swimmer_name']],
-        ["Gender:", race_details['gender'].value],
-        ["Distance:", f"{race_details['distance'].value}m"],
-        ["Stroke:", race_details['stroke'].value],
-        ["Session:", race_details['session'].value],
-        ["Data Folder:", folder_name]
-    ]
+    # Create a Paragraph for each line of race info with left alignment
+    title_style = ParagraphStyle(
+        'Title',
+        fontSize=12,
+        fontName='Helvetica-Bold',
+        alignment=0,  # 0 = left, 1 = center, 2 = right
+        spaceAfter=6  # Increased spacing after the title
+    )
     
-    race_table = Table(race_info, colWidths=[100, 200])
-    race_table.setStyle(TableStyle([
-        ('FONTNAME', (0, 0), (-1, -1), 'Helvetica'),
-        ('FONTSIZE', (0, 0), (-1, -1), 10),
-        ('ALIGN', (0, 0), (0, -1), 'RIGHT'),
-        ('ALIGN', (1, 0), (1, -1), 'LEFT'),
-        ('TOPPADDING', (0, 0), (-1, -1), 3),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
-    ]))
-    elements.append(race_table)
-    elements.append(Spacer(1, 20))  # Add some space after race details
+    info_style = ParagraphStyle(
+        'Info',
+        fontSize=9,
+        fontName='Helvetica',
+        alignment=0,
+        spaceAfter=2  # Increased spacing after each info line
+    )
+    
+    # Add race details as left-aligned paragraphs
+    elements.append(Paragraph(race_details['swimmer_name'], title_style))
+    elements.append(Paragraph(race_string, info_style))
+    elements.append(Paragraph(user_folder, info_style))
+    elements.append(Spacer(1, 5))  # Reduced spacer after all header info
     
     if not lap_stats.empty:
-        # Split data into two tables
-        stroke_columns = ["Lap", "Lap Time", "Strk Count", "Strk/Sec", "Strk->Wall"]
-        turn_columns = ["Lap", "Breakout Time", "Breakout Distance", "UW Speed", 
-                       "Break->15m", "15m->Turn", "Turn Time"]
+        # Combined columns for all statistics in new order
+        columns = [
+            "Lap", "Break Time", "Break->15", "15->Turn", "Strk->Wall",
+            "Turn Time", "Lap Time", "Break Dist", "UW Speed", "Strk Count", "Strk/Sec"
+        ]
         
         # Format integers, ignoring NaN values
         lap_stats["Lap"] = lap_stats["Lap"].fillna(0).astype(int)
         lap_stats["Stroke Count"] = lap_stats["Stroke Count"].fillna(0).astype(int)
         
-        # Create stroke data table
-        stroke_data = [stroke_columns]
+        # Create combined data table with new column order
+        data = [columns]  # Header row
         for _, row in lap_stats.iterrows():
-            stroke_data.append([
-                int(row["Lap"]),
-                row.get("Lap Time", ""),
-                int(row.get("Stroke Count", 0)) if pd.notna(row.get("Stroke Count")) else "",
-                row.get("Strokes per Second", ""),
-                row.get("Stroke to Wall", "")
-            ])
-        
-        # Create turn/breakout data table
-        turn_data = [turn_columns]
-        for _, row in lap_stats.iterrows():
-            turn_data.append([
+            data_row = [
                 int(row["Lap"]),
                 row.get("Breakout Time", ""),
-                row.get("Breakout Distance", ""),
-                row.get("Underwater Speed", ""),
-                row.get("Breakout to 15m Time", ""),
-                row.get("15m to Turn Time", ""),
-                row.get("Turn Time", "")
-            ])
+                row.get("Break->15", ""),
+                row.get("15->Turn", ""),
+                row.get("Stroke to Wall", ""),
+                row.get("Turn Time", ""),
+                row.get("Lap Time", ""),
+                row.get("Breakout Dist", ""),
+                row.get("UW Speed", ""),
+                int(row.get("Stroke Count", 0)) if pd.notna(row.get("Stroke Count")) else "",
+                row.get("Strokes per Second", "")
+            ]
+            data.append(data_row)
         
-        # Style for both tables
-        table_style = TableStyle([
+        # Add averages row
+        avg_row = ["AVG"]
+        for col in columns[1:]:  # Skip the "Lap" column
+            col_key = col
+            if col == "Break Time":
+                col_key = "Breakout Time"
+            elif col == "Break Dist":
+                col_key = "Breakout Dist"
+            elif col == "Strk Count":
+                col_key = "Stroke Count"
+            elif col == "Strk/Sec":
+                col_key = "Strokes per Second"
+            
+            avg_key = f"Average {col_key}"
+            avg_value = overall_stats.get(avg_key, "")
+            avg_row.append(avg_value)
+        
+        data.append(avg_row)
+        
+        # Calculate column widths to fit on page
+        available_width = 572  # letter width (612) - margins (40)
+        col_widths = [25]  # Lap column
+        remaining_cols = len(columns) - 1
+        standard_col_width = (available_width - 25) / remaining_cols
+        col_widths.extend([standard_col_width] * remaining_cols)
+        
+        # Create and style table
+        table = Table(data, colWidths=col_widths)
+        table_style = [
             ('FONTNAME', (0, 0), (-1, -1), 'Helvetica'),
-            ('FONTSIZE', (0, 0), (-1, -1), 9),  # Slightly larger font
+            ('FONTSIZE', (0, 0), (-1, -1), 8),  # Smaller font size
             ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
             ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
             ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
             ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-            ('BOTTOMPADDING', (0, 0), (-1, 0), 8),
-            ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
-            ('GRID', (0, 0), (-1, -1), 1, colors.black),
-            ('TOPPADDING', (0, 0), (-1, -1), 3),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.black),  # Thinner grid lines
+            ('TOPPADDING', (0, 0), (-1, -1), 1),  # Minimal padding
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 1),
+        ]
+        
+        # Style the averages row
+        avg_row_index = len(data) - 1
+        table_style.extend([
+            ('BACKGROUND', (0, avg_row_index), (-1, avg_row_index), colors.lightgrey),
+            ('FONTNAME', (0, avg_row_index), (-1, avg_row_index), 'Helvetica-Bold'),
         ])
         
-        # Add stroke table
-        elements.append(canvas.Canvas(filepath).drawString(100, 700, "Stroke Statistics"))
-        stroke_table = Table(stroke_data, colWidths=[30, 50, 50, 50, 50])
-        stroke_table.setStyle(table_style)
-        elements.append(stroke_table)
+        table.setStyle(TableStyle(table_style))
+        elements.append(table)
         
-        # Add some space between tables
-        elements.append(Spacer(1, 20))
+        # Add measurement note
+        elements.append(Spacer(1, 5))
+        note = "Note: All distances in yards, speeds in yards/second. 15m mark (16.4042 yards) used for calculations."
         
-        # Add turn/breakout table
-        elements.append(canvas.Canvas(filepath).drawString(100, 650, "Turn and Breakout Statistics"))
-        turn_table = Table(turn_data, colWidths=[30, 50, 60, 50, 50, 50, 50])
-        turn_table.setStyle(table_style)
-        elements.append(turn_table)
-    
-    # Add a page break before overall stats
-    elements.append(PageBreak())
-    
-    # Overall Statistics
-    elements.append(canvas.Canvas(filepath).drawString(100, 750, "Overall Statistics:"))
-    y_position = 720
-    
-    # Format overall stats in two columns
-    stats_items = list(overall_stats.items())
-    mid_point = len(stats_items) // 2
-    
-    for i in range(mid_point):
-        # Left column
-        left_stat = stats_items[i]
-        elements.append(canvas.Canvas(filepath).drawString(
-            50, y_position, f"{left_stat[0]}: {left_stat[1]:.2f}"))
+        note_style = ParagraphStyle(
+            'Note',
+            fontSize=7,
+            fontName='Helvetica-Oblique'
+        )
         
-        # Right column (if it exists)
-        if i + mid_point < len(stats_items):
-            right_stat = stats_items[i + mid_point]
-            elements.append(canvas.Canvas(filepath).drawString(
-                300, y_position, f"{right_stat[0]}: {right_stat[1]:.2f}"))
+        elements.append(Paragraph(note, note_style))
         
-        y_position -= 20
+        # Add variable descriptions
+        elements.append(Spacer(1, 8))
+        
+        description_style = ParagraphStyle(
+            'Description',
+            fontSize=7,
+            fontName='Helvetica',
+            leading=9  # Line spacing
+        )
+        
+        descriptions = [
+            "Break Time: Time from wall/start to breakout (seconds)",
+            "Break->15: Time from breakout to 15m mark (seconds)", 
+            "15->Turn: Time from 15m mark to next turn/finish (seconds)",
+            "Strk->Wall: Time from last stroke to wall (seconds)",
+            "Turn Time: Time from hand touch to push off (seconds)",
+            "Lap Time: Total time for the lap (seconds)",
+            "Break Dist: Distance travelled underwater (yards)",
+            "UW Speed: Underwater speed (yards/second)",
+            "Strk Count: Number of strokes in the lap (strokes)",
+            "Strk/Sec: Stroke rate (strokes per second)"
+        ]
+        
+        # Create a multi-column layout for descriptions
+        num_cols = 2
+        rows = []
+        for i in range(0, len(descriptions), num_cols):
+            row = descriptions[i:i+num_cols]
+            # Pad with empty strings if needed
+            while len(row) < num_cols:
+                row.append("")
+            rows.append(row)
+        
+        # Create table for descriptions
+        desc_table = Table(rows, colWidths=[280, 280])
+        desc_table.setStyle(TableStyle([
+            ('FONTSIZE', (0, 0), (-1, -1), 7),
+            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+            ('LEFTPADDING', (0, 0), (-1, -1), 0),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 10),
+            ('TOPPADDING', (0, 0), (-1, -1), 0),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 2),
+        ]))
+        
+        elements.append(desc_table)
     
     doc.build(elements)
 

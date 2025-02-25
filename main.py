@@ -150,7 +150,7 @@ def enter_break_and_fifteen_data(race_details, base_directory):
         print(f"\nLap {lap + 1}:")
         try:
             breakout_time = float(input(f"Enter breakout time for lap {lap + 1} (seconds): ").strip())
-            breakout_distance = float(input(f"Enter breakout distance for lap {lap + 1} (meters): ").strip())
+            breakout_distance = float(input(f"Enter breakout distance for lap {lap + 1} (yards): ").strip())
             fifteen_time = float(input(f"Enter 15m time for lap {lap + 1} (seconds): ").strip())
             
             data["breakout_times"].append(breakout_time)
