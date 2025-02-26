@@ -10,6 +10,7 @@ import matplotlib.pyplot as plt
 import matplotlib
 matplotlib.use('Agg')  # Use non-interactive backend
 import io
+import copy
 
 def calculate_per_lap_stats(data, race_details):
     """
@@ -380,9 +381,9 @@ def create_race_metrics_plots(lap_stats):
 
 def create_stroke_by_stroke_plot(events, lap_start, lap_end, lap_number, breakout_times=None):
     """
-    Create a plot showing running stroke rate for a single lap.
-    X-axis is stroke number, Y-axis is running stroke rate (strokes/second).
-    Starts calculation from breakout (if available) or after first stroke.
+    Create a plot showing individual stroke rates for a single lap.
+    X-axis is stroke number, Y-axis is stroke rate (strokes/second).
+    Includes a line of best fit to show trend.
     """
     # Get all strokes in this lap
     lap_strokes = [e for e in events 
@@ -392,16 +393,19 @@ def create_stroke_by_stroke_plot(events, lap_start, lap_end, lap_number, breakou
     # Sort strokes by time
     lap_strokes.sort(key=lambda x: x['time'])
     
-    # Debug output
-    print(f"Lap {lap_number}: Found {len(lap_strokes)} strokes between {lap_start:.2f} and {lap_end:.2f}")
+    print(f"Lap {lap_number}: Found {len(lap_strokes)} strokes")
     
+    # If we have fewer than 2 strokes, we can't calculate rates
     if len(lap_strokes) < 2:
-        # Not enough strokes to calculate rates
+        print(f"  Lap {lap_number}: Not enough strokes to calculate rates")
+        # Create an empty plot
         plt.figure(figsize=(5, 4))
-        plt.title(f'Lap {lap_number}: Not enough strokes for analysis')
+        plt.title(f'Lap {lap_number}: Stroke Rate')
         plt.xlabel('Stroke Number')
         plt.ylabel('Stroke Rate (strokes/second)')
         plt.grid(True, alpha=0.3)
+        plt.text(0.5, 0.5, 'Not enough strokes to calculate rates', 
+                ha='center', va='center', transform=plt.gca().transAxes)
         
         # Save to bytes buffer
         buf = io.BytesIO()
@@ -410,79 +414,49 @@ def create_stroke_by_stroke_plot(events, lap_start, lap_end, lap_number, breakou
         buf.seek(0)
         return buf
     
-    # Get breakout time for this lap if available
-    breakout_time = None
-    if breakout_times is not None and lap_number-1 < len(breakout_times):
-        # Breakout times are already absolute times from the start of the race
-        breakout_time = breakout_times[lap_number-1]
-        if not pd.isna(breakout_time):
-            print(f"  Lap {lap_number}: Using breakout time {breakout_time:.2f} (absolute time)")
-    
-    # Calculate running stroke rates
+    # Extract stroke times
     stroke_times = [s['time'] for s in lap_strokes]
-    stroke_numbers = list(range(1, len(stroke_times) + 1))
     
-    # Determine start time for calculations
-    if breakout_time and breakout_time >= lap_start and breakout_time <= lap_end:
-        # Use breakout time if available and within this lap's timeframe
-        calculation_start_time = breakout_time
-    else:
-        # Otherwise use first stroke time
-        calculation_start_time = stroke_times[0]
+    # Calculate individual stroke rates (time between consecutive strokes)
+    stroke_numbers = list(range(1, len(stroke_times)))
+    stroke_rates = []
     
-    print(f"  Lap {lap_number}: Calculation start time: {calculation_start_time:.2f}")
-    
-    # Calculate rates for each stroke
-    running_rates = []
-    
-    for i, time in enumerate(stroke_times):
-        # Skip strokes before the calculation start time
-        if time < calculation_start_time:
-            running_rates.append(None)  # Placeholder for strokes before breakout
-            continue
-            
-        # For strokes after breakout/first stroke
-        time_since_start = time - calculation_start_time
-        if time_since_start > 0:
-            # Count only strokes after breakout/first stroke
-            strokes_after_start = sum(1 for t in stroke_times if calculation_start_time <= t <= time)
-            rate = strokes_after_start / time_since_start
-            running_rates.append(rate)
-            print(f"    Stroke {i+1} at {time:.2f}: {strokes_after_start} strokes in {time_since_start:.2f}s = {rate:.2f} strokes/sec")
-        else:
-            running_rates.append(None)  # Skip strokes at exactly the start time
-            print(f"    Stroke {i+1} at {time:.2f}: Skipped (at start time)")
+    for i in range(1, len(stroke_times)):
+        time_diff = stroke_times[i] - stroke_times[i-1]
+        rate = 1.0 / time_diff if time_diff > 0 else 0
+        stroke_rates.append(rate)
+        print(f"    Stroke {i+1} at {stroke_times[i]:.2f}: Rate = {rate:.2f} strokes/sec")
     
     # Create plot
     plt.figure(figsize=(5, 4))
     
-    # Filter out None values for plotting
-    valid_indices = [i for i, rate in enumerate(running_rates) if rate is not None]
-    valid_stroke_numbers = [stroke_numbers[i] for i in valid_indices]
-    valid_rates = [running_rates[i] for i in valid_indices]
+    # Scatter plot of individual stroke rates
+    plt.scatter(stroke_numbers, stroke_rates, color='green', s=40)
     
-    print(f"  Lap {lap_number}: Found {len(valid_rates)} valid stroke rates to plot")
+    # Add line of best fit if we have enough points
+    if len(stroke_rates) >= 2:
+        # Calculate line of best fit
+        x = np.array(stroke_numbers)
+        y = np.array(stroke_rates)
+        m, b = np.polyfit(x, y, 1)
+        plt.plot(x, m*x + b, color='blue', linestyle='--')
     
-    if valid_rates:
-        plt.plot(valid_stroke_numbers, valid_rates, 
-                marker='o', linestyle='-', color='green', linewidth=2, markersize=6)
-        
-        # Add data labels
-        for i, rate in enumerate(valid_rates):
-            plt.annotate(f"{rate:.2f}", 
-                        (valid_stroke_numbers[i], rate),
-                        xytext=(0, 5), textcoords='offset points',
-                        ha='center', fontsize=8)
+    # Add data labels
+    for i, rate in enumerate(stroke_rates):
+        plt.annotate(f"{rate:.2f}", 
+                    (stroke_numbers[i], rate),
+                    xytext=(0, 5), textcoords='offset points',
+                    ha='center', fontsize=8)
     
-    plt.title(f'Lap {lap_number}: Running Stroke Rate')
+    plt.title(f'Lap {lap_number}: Stroke Rate')
     plt.xlabel('Stroke Number')
     plt.ylabel('Stroke Rate (strokes/second)')
     plt.grid(True, alpha=0.3)
     
     # Set reasonable y-axis limits
-    if valid_rates:
-        max_rate = max(valid_rates)
-        min_rate = min(valid_rates)
+    if stroke_rates:
+        max_rate = max(stroke_rates)
+        min_rate = min(stroke_rates)
         buffer = (max_rate - min_rate) * 0.1 if max_rate > min_rate else 0.2
         plt.ylim(max(0, min_rate - buffer), max_rate + buffer)
     
@@ -494,10 +468,392 @@ def create_stroke_by_stroke_plot(events, lap_start, lap_end, lap_number, breakou
     
     return buf
 
-def generate_pdf_report(lap_stats, overall_stats, filepath, race_details):
+def create_continuous_stroke_graph(data, race_details):
+    """
+    Create a continuous stroke rate graph across all laps.
+    Shows individual stroke rates with a line of best fit.
+    Handles cross-lap transitions by not calculating rates between laps.
+    """
+    plt.figure(figsize=(10, 6))
+    
+    # Get events
+    events = data.get('events', [])
+    
+    # Find lap markers based on stroke type
+    lap_markers = [0.0]  # Start with 0 for first lap
+    
+    stroke = race_details['stroke'].value
+    
+    if stroke in ["breaststroke", "butterfly"]:
+        # For breast/fly, use turn_start events
+        lap_markers.extend([e['time'] for e in events if e['type'] == 'turn_start'])
+    elif stroke == "im":
+        # For IM, pattern depends on distance
+        if race_details['distance'].value == 200:
+            # 200 IM: turn_start (fly, back) -> turn_end (breast) -> turn_start (free)
+            turn_events = [(e['time'], e['type']) for e in events if e['type'] in ['turn_start', 'turn_end']]
+            turn_events.sort(key=lambda x: x[0])  # Sort by time
+            
+            # First 2 turns (fly, back) - turn_start
+            lap_markers.extend([t[0] for t in turn_events[:2] if t[1] == 'turn_start'])
+            # Next turn (breast) - turn_end 
+            lap_markers.extend([t[0] for t in turn_events[2:3] if t[1] == 'turn_end'])
+            # Next 3 turns (free) - turn_start
+            lap_markers.extend([t[0] for t in turn_events[3:6] if t[1] == 'turn_start'])
+        
+        elif race_details['distance'].value == 400:
+            # 400 IM: turn_start (fly) -> turn_end (back) -> turn_start (breast) -> turn_end (free)
+            turn_events = [(e['time'], e['type']) for e in events if e['type'] in ['turn_start', 'turn_end']]
+            turn_events.sort(key=lambda x: x[0])
+            
+            # First 4 turns (fly) - turn_start
+            lap_markers.extend([t[0] for t in turn_events[:4] if t[1] == 'turn_start'])
+            # Next 3 turns (back) - turn_end
+            lap_markers.extend([t[0] for t in turn_events[4:7] if t[1] == 'turn_end'])
+            # Next 5 turns (breast) - turn_start
+            lap_markers.extend([t[0] for t in turn_events[7:12] if t[1] == 'turn_start'])
+            # Last 3 turns (free) - turn_end
+            lap_markers.extend([t[0] for t in turn_events[12:] if t[1] == 'turn_end'])
+    else:
+        # For freestyle and backstroke, use turn_end events
+        lap_markers.extend([e['time'] for e in events if e['type'] == 'turn_end'])
+    
+    # Add the final time
+    end_time = next((e['time'] for e in events if e['type'] == 'end'), None)
+    if end_time:
+        lap_markers.append(end_time)
+    
+    # Get all strokes
+    all_strokes = [e for e in events if e['type'] == 'stroke']
+    all_strokes.sort(key=lambda x: x['time'])
+    
+    # If we have fewer than 2 strokes, we can't calculate rates
+    if len(all_strokes) < 2:
+        plt.title('Continuous Stroke Rate Analysis')
+        plt.xlabel('Stroke Number')
+        plt.ylabel('Stroke Rate (strokes/second)')
+        plt.grid(True, alpha=0.3)
+        plt.text(0.5, 0.5, 'Not enough strokes to calculate rates', 
+                ha='center', va='center', transform=plt.gca().transAxes)
+        
+        # Save to bytes buffer
+        buf = io.BytesIO()
+        plt.savefig(buf, format='png', dpi=100, bbox_inches='tight')
+        plt.close()
+        buf.seek(0)
+        return buf
+    
+    # Extract stroke times and organize by lap
+    stroke_times_by_lap = []
+    current_lap = 0
+    
+    for marker_idx in range(len(lap_markers) - 1):
+        lap_start = lap_markers[marker_idx]
+        lap_end = lap_markers[marker_idx + 1]
+        
+        # Get strokes for this lap
+        lap_strokes = [s for s in all_strokes if lap_start <= s['time'] <= lap_end]
+        lap_strokes.sort(key=lambda x: x['time'])
+        
+        if lap_strokes:
+            stroke_times_by_lap.append([s['time'] for s in lap_strokes])
+    
+    # Calculate stroke rates within each lap (not across laps)
+    all_stroke_numbers = []
+    all_stroke_rates = []
+    all_stroke_times = []
+    
+    # Track cumulative stroke count for x-axis
+    cumulative_stroke_count = 0
+    
+    for lap_idx, lap_times in enumerate(stroke_times_by_lap):
+        # Skip laps with fewer than 2 strokes
+        if len(lap_times) < 2:
+            continue
+            
+        # Calculate rates within this lap
+        for i in range(1, len(lap_times)):
+            time_diff = lap_times[i] - lap_times[i-1]
+            rate = 1.0 / time_diff if time_diff > 0 else 0
+            
+            # Add to our lists for plotting
+            cumulative_stroke_count += 1
+            all_stroke_numbers.append(cumulative_stroke_count)
+            all_stroke_rates.append(rate)
+            all_stroke_times.append(lap_times[i])
+        
+        # Increment stroke count for the first stroke of next lap
+        cumulative_stroke_count += 1
+    
+    # Scatter plot of individual stroke rates
+    plt.scatter(all_stroke_numbers, all_stroke_rates, color='green', s=40)
+    
+    # Add line of best fit if we have enough points
+    if len(all_stroke_rates) >= 2:
+        # Calculate line of best fit
+        x = np.array(all_stroke_numbers)
+        y = np.array(all_stroke_rates)
+        m, b = np.polyfit(x, y, 1)
+        plt.plot(x, m*x + b, color='blue', linestyle='--')
+    
+    # Add lap markers as vertical lines
+    cumulative_stroke = 0
+    for lap_idx, lap_times in enumerate(stroke_times_by_lap):
+        if lap_idx > 0 and lap_times:  # Skip first lap
+            # Mark the start of this lap (first stroke)
+            plt.axvline(x=cumulative_stroke, color='red', linestyle='--', alpha=0.7)
+            plt.text(cumulative_stroke, max(all_stroke_rates) * 0.95, 
+                    f"Lap {lap_idx+1}", rotation=90, verticalalignment='top')
+        
+        # Update cumulative stroke count for next lap
+        cumulative_stroke += len(lap_times)
+    
+    plt.title('Continuous Stroke Rate Analysis')
+    plt.xlabel('Stroke Number')
+    plt.ylabel('Stroke Rate (strokes/second)')
+    plt.grid(True, alpha=0.3)
+    
+    # Save to bytes buffer
+    buf = io.BytesIO()
+    plt.savefig(buf, format='png', dpi=100, bbox_inches='tight')
+    plt.close()
+    buf.seek(0)
+    
+    return buf
+
+def create_stroke_by_stroke_analysis_elements(data, race_details):
+    """
+    Create stroke-by-stroke analysis elements for the PDF.
+    Returns a list of flowable elements to add to the PDF.
+    """
+    elements = []
+    
+    # Get events
+    events = data.get('events', [])
+    
+    # Find lap markers based on stroke type
+    lap_markers = [0.0]  # Start with 0 for first lap
+    
+    stroke = race_details['stroke'].value
+    
+    if stroke in ["breaststroke", "butterfly"]:
+        # For breast/fly, use turn_start events
+        lap_markers.extend([e['time'] for e in events if e['type'] == 'turn_start'])
+    elif stroke == "im":
+        # For IM, pattern depends on distance
+        if race_details['distance'].value == 200:
+            # 200 IM: turn_start (fly, back) -> turn_end (breast) -> turn_start (free)
+            turn_events = [(e['time'], e['type']) for e in events if e['type'] in ['turn_start', 'turn_end']]
+            turn_events.sort(key=lambda x: x[0])  # Sort by time
+            
+            # First 2 turns (fly, back) - turn_start
+            lap_markers.extend([t[0] for t in turn_events[:2] if t[1] == 'turn_start'])
+            # Next turn (breast) - turn_end 
+            lap_markers.extend([t[0] for t in turn_events[2:3] if t[1] == 'turn_end'])
+            # Next 3 turns (free) - turn_start
+            lap_markers.extend([t[0] for t in turn_events[3:6] if t[1] == 'turn_start'])
+        
+        elif race_details['distance'].value == 400:
+            # 400 IM: turn_start (fly) -> turn_end (back) -> turn_start (breast) -> turn_end (free)
+            turn_events = [(e['time'], e['type']) for e in events if e['type'] in ['turn_start', 'turn_end']]
+            turn_events.sort(key=lambda x: x[0])
+            
+            # First 4 turns (fly) - turn_start
+            lap_markers.extend([t[0] for t in turn_events[:4] if t[1] == 'turn_start'])
+            # Next 3 turns (back) - turn_end
+            lap_markers.extend([t[0] for t in turn_events[4:7] if t[1] == 'turn_end'])
+            # Next 5 turns (breast) - turn_start
+            lap_markers.extend([t[0] for t in turn_events[7:12] if t[1] == 'turn_start'])
+            # Last 3 turns (free) - turn_end
+            lap_markers.extend([t[0] for t in turn_events[12:] if t[1] == 'turn_end'])
+    else:
+        # For freestyle and backstroke, use turn_end events
+        lap_markers.extend([e['time'] for e in events if e['type'] == 'turn_end'])
+    
+    # Add the final time
+    end_time = next((e['time'] for e in events if e['type'] == 'end'), None)
+    if end_time:
+        lap_markers.append(end_time)
+    
+    # Get breakout times if available
+    breakout_times = data.get('breakout_times', None)
+    
+    # Create stroke-by-stroke plots for each lap
+    num_laps = min(len(lap_markers) - 1, 8)  # Up to 8 laps (200 yard race)
+    
+    # Generate all plots first
+    all_plots = []
+    for lap in range(num_laps):
+        lap_start = lap_markers[lap]
+        lap_end = lap_markers[lap + 1]
+        
+        # Create the plot for this lap
+        stroke_plot_buf = create_stroke_by_stroke_plot(events, lap_start, lap_end, lap + 1, breakout_times)
+        
+        # Create a paragraph for the lap title
+        lap_title = Paragraph(f"Lap {lap+1}", ParagraphStyle(
+            'Title',
+            fontSize=10,
+            fontName='Helvetica-Bold',
+            alignment=0,
+            spaceAfter=4
+        ))
+        
+        # Create the image
+        stroke_plot_img = Image(stroke_plot_buf, width=250, height=200)
+        
+        # Add both to the list
+        all_plots.append((lap_title, stroke_plot_img))
+    
+    # Now arrange the plots in a grid, 2x2 per page
+    for i in range(0, len(all_plots), 4):
+        # Take up to 4 plots for this page
+        page_plots = all_plots[i:i+4]
+        
+        # Create a table for this page
+        data = []
+        
+        # Add plots to the table, 2 per row
+        for j in range(0, len(page_plots), 2):
+            row_plots = page_plots[j:j+2]
+            row = []
+            
+            for title, img in row_plots:
+                # Create a container for these elements
+                container = []
+                container.append(title)
+                container.append(img)
+                row.append(container)
+            
+            # Pad with empty cells if needed
+            while len(row) < 2:
+                row.append("")
+                
+            data.append(row)
+        
+        # Create the table
+        plot_table = Table(data, colWidths=[275, 275])
+        plot_table.setStyle(TableStyle([
+            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('TOPPADDING', (0, 0), (-1, -1), 10),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 10),
+        ]))
+        
+        elements.append(plot_table)
+    
+    return elements
+
+def prepare_report_file(race_details, base_directory):
+    """
+    Prepare the file path for the report and check if it exists.
+    Prompt the user for overwrite confirmation if necessary.
+    Return the existence status of stroke and turn data, and 15m and breakout data.
+    """
+    # Construct the file paths based on race details
+    filename = f"{race_details['swimmer_name'].replace(' ', '_')}_{race_details['gender'].value}_{race_details['distance'].value}_{race_details['stroke'].value}.csv"
+    
+    stroke_and_turn_filepath = os.path.join(base_directory, "stroke_and_turn", race_details['session'].value, filename)
+    break_and_fifteen_filepath = os.path.join(base_directory, "break_and_fifteen", race_details['session'].value, filename)
+    
+    stroke_and_turn_exists = os.path.exists(stroke_and_turn_filepath)
+    break_and_fifteen_exists = os.path.exists(break_and_fifteen_filepath)
+    
+    if not stroke_and_turn_exists and not break_and_fifteen_exists:
+        print(f"No data found for {filename}.")
+        return None, None
+    
+    # Prepare the report file path
+    base_report_directory = base_directory.replace("data", "reports", 1)
+    pdf_filename = filename.replace('.csv', '.pdf')
+    pdf_filepath = os.path.join(base_report_directory, race_details['session'].value, pdf_filename)
+    
+    # Check if the report already exists
+    if os.path.exists(pdf_filepath):
+        confirm = input(f"Report {pdf_filename} already exists. Overwrite? (y/n): ").strip().lower()
+        if confirm != 'y':
+            print("Operation cancelled.")
+            return None, None
+    
+    data_paths = []
+    if stroke_and_turn_exists:
+        data_paths.append(stroke_and_turn_filepath)
+    if break_and_fifteen_exists:
+        data_paths.append(break_and_fifteen_filepath)
+        
+    return data_paths, pdf_filepath
+
+def run(race_details, base_directory):
+    """
+    Generate a report based on race details and data in the specified directory.
+    """
+    data_paths, pdf_filepath = prepare_report_file(race_details, base_directory)
+    
+    if not data_paths or pdf_filepath is None:
+        return
+    
+    # Read the data from the CSV files
+    data = {}
+    
+    # Read stroke and turn data
+    stroke_turn_path = [p for p in data_paths if 'stroke_and_turn' in p]
+    if stroke_turn_path:
+        print(f"DEBUG: Reading stroke and turn data from {stroke_turn_path[0]}")
+        events_df = pd.read_csv(stroke_turn_path[0])
+        print(f"DEBUG: CSV columns: {events_df.columns.tolist()}")
+        print(f"DEBUG: First few rows: {events_df.head().to_dict('records')}")
+        data['events'] = events_df.to_dict('records')
+        data['stroke'] = race_details['stroke'].value
+        print(f"DEBUG: Found {len(data['events'])} events")
+        print(f"DEBUG: Data keys before deepcopy: {list(data.keys())}")
+    else:
+        print("DEBUG: No stroke and turn data found")
+    
+    # Read breakout and fifteen data
+    breakout_path = [p for p in data_paths if 'break_and_fifteen' in p]
+    if breakout_path:
+        print(f"DEBUG: Reading breakout data from {breakout_path[0]}")
+        breakout_df = pd.read_csv(breakout_path[0])
+        
+        # Add each column individually to avoid overwriting 'events'
+        for column in breakout_df.columns:
+            data[column] = breakout_df[column].tolist()
+        
+        print(f"DEBUG: Data keys after adding breakout data: {list(data.keys())}")
+    
+    # Make a copy of the data for statistics calculation
+    data_for_stats = copy.deepcopy(data)
+    print(f"DEBUG: Data keys after deepcopy: {list(data.keys())}")
+    
+    # Calculate statistics
+    lap_stats = calculate_per_lap_stats(data_for_stats, race_details)
+    print(f"DEBUG: Data keys after calculate_per_lap_stats: {list(data.keys())}")
+    
+    overall_stats = calculate_overall_stats(lap_stats)
+    print(f"DEBUG: Data keys after calculate_overall_stats: {list(data.keys())}")
+    
+    # Debug checks before generating PDF
+    print(f"DEBUG: Race distance: {race_details['distance'].value}")
+    print(f"DEBUG: 'events' in data: {'events' in data}")
+    print(f"DEBUG: Condition check: {data and 'events' in data and int(race_details['distance'].value) <= 200}")
+    
+    # Generate PDF report
+    os.makedirs(os.path.dirname(pdf_filepath), exist_ok=True)
+    generate_pdf_report(lap_stats, overall_stats, pdf_filepath, race_details, data)
+    
+    print(f"Report generated: {pdf_filepath}")
+
+def generate_pdf_report(lap_stats, overall_stats, filepath, race_details, data=None):
     """
     Generate a PDF report with all statistics in a single compact table.
     All speeds and distances are in yards/second and yards respectively.
+    
+    Parameters:
+        lap_stats: DataFrame with lap statistics
+        overall_stats: Dictionary with overall statistics
+        filepath: Path to save the PDF
+        race_details: Dictionary with race details
+        data: Dictionary with raw data including events
     """
     doc = SimpleDocTemplate(
         filepath, 
@@ -557,7 +913,7 @@ def generate_pdf_report(lap_stats, overall_stats, filepath, race_details):
         lap_stats["Stroke Count"] = lap_stats["Stroke Count"].fillna(0).astype(int)
         
         # Create combined data table with new column order
-        data = [columns]  # Header row
+        data_table = [columns]  # Header row
         
         # Determine which cells need asterisks
         last_lap_index = lap_stats["Lap"].max()
@@ -594,7 +950,7 @@ def generate_pdf_report(lap_stats, overall_stats, filepath, race_details):
                 if pd.notna(row.get("15->Turn")):
                     data_row[3] = f"{data_row[3]}*"
             
-            data.append(data_row)
+            data_table.append(data_row)
         
         # Add averages row
         avg_row = ["AVG"]
@@ -615,7 +971,7 @@ def generate_pdf_report(lap_stats, overall_stats, filepath, race_details):
             avg_value = overall_stats.get(avg_key, "")
             avg_row.append(avg_value)
         
-        data.append(avg_row)
+        data_table.append(avg_row)
         
         # Calculate column widths to fit on page
         available_width = 572  # letter width (612) - margins (40)
@@ -625,7 +981,7 @@ def generate_pdf_report(lap_stats, overall_stats, filepath, race_details):
         col_widths.extend([standard_col_width] * remaining_cols)
         
         # Create and style table
-        table = Table(data, colWidths=col_widths)
+        table = Table(data_table, colWidths=col_widths)
         
         # Basic table styling
         table_style = [
@@ -641,18 +997,18 @@ def generate_pdf_report(lap_stats, overall_stats, filepath, race_details):
         ]
         
         # Add thicker vertical lines around Lap Time column (column 6)
-        for row in range(len(data)):
+        for row in range(len(data_table)):
             # Left border of Lap Time column
             table_style.append(('LINEAFTER', (5, row), (5, row), 1.5, colors.black))
             # Right border of Lap Time column
             table_style.append(('LINEAFTER', (6, row), (6, row), 1.5, colors.black))
         
         # Add thicker line after UW Speed column (column 8)
-        for row in range(len(data)):
+        for row in range(len(data_table)):
             table_style.append(('LINEAFTER', (8, row), (8, row), 1.5, colors.black))
         
         # Style the averages row
-        avg_row_index = len(data) - 1
+        avg_row_index = len(data_table) - 1
         table_style.extend([
             ('BACKGROUND', (0, avg_row_index), (-1, avg_row_index), colors.grey),
             ('TEXTCOLOR', (0, avg_row_index), (-1, avg_row_index), colors.white),
@@ -732,248 +1088,38 @@ def generate_pdf_report(lap_stats, overall_stats, filepath, race_details):
         elements.append(Paragraph("Race Performance Metrics", title_style))
         elements.append(Spacer(1, 10))
         elements.append(race_metrics_img)
-    
-    doc.build(elements)
-
-def prepare_report_file(race_details, base_directory):
-    """
-    Prepare the file path for the report and check if it exists.
-    Prompt the user for overwrite confirmation if necessary.
-    Return the existence status of stroke and turn data, and 15m and breakout data.
-    """
-    # Construct the file paths based on race details
-    filename = f"{race_details['swimmer_name'].replace(' ', '_')}_{race_details['gender'].value}_{race_details['distance'].value}_{race_details['stroke'].value}.csv"
-    
-    stroke_and_turn_filepath = os.path.join(base_directory, "stroke_and_turn", race_details['session'].value, filename)
-    break_and_fifteen_filepath = os.path.join(base_directory, "break_and_fifteen", race_details['session'].value, filename)
-    
-    stroke_and_turn_exists = os.path.exists(stroke_and_turn_filepath)
-    break_and_fifteen_exists = os.path.exists(break_and_fifteen_filepath)
-    
-    if not stroke_and_turn_exists and not break_and_fifteen_exists:
-        print(f"No data found for {filename}.")
-        return None, None
-    
-    # Prepare the report file path
-    base_report_directory = base_directory.replace("data", "reports", 1)
-    pdf_filename = filename.replace('.csv', '.pdf')
-    pdf_filepath = os.path.join(base_report_directory, race_details['session'].value, pdf_filename)
-    
-    # Check if the report already exists
-    if os.path.exists(pdf_filepath):
-        confirm = input(f"Report {pdf_filename} already exists. Overwrite? (y/n): ").strip().lower()
-        if confirm != 'y':
-            print("Operation cancelled.")
-            return None, None
-    
-    data_paths = []
-    if stroke_and_turn_exists:
-        data_paths.append(stroke_and_turn_filepath)
-    if break_and_fifteen_exists:
-        data_paths.append(break_and_fifteen_filepath)
         
-    return data_paths, pdf_filepath
-
-def run(race_details, base_directory):
-    """
-    Generate a report based on race details and data in the specified directory.
-    """
-    data_paths, pdf_filepath = prepare_report_file(race_details, base_directory)
-    
-    if not data_paths or pdf_filepath is None:
-        return
-    
-    # Read the data from the CSV files
-    data = {}
-    
-    # Read stroke and turn data
-    stroke_turn_path = [p for p in data_paths if 'stroke_and_turn' in p]
-    if stroke_turn_path:
-        events_df = pd.read_csv(stroke_turn_path[0])
-        data['events'] = events_df.to_dict('records')
-        data['stroke'] = race_details['stroke'].value
-    
-    # Read breakout and fifteen data
-    breakout_path = [p for p in data_paths if 'break_and_fifteen' in p]
-    if breakout_path:
-        breakout_df = pd.read_csv(breakout_path[0])
-        data.update(breakout_df.to_dict('list'))
-    
-    # Calculate statistics
-    lap_stats = calculate_per_lap_stats(data, race_details)
-    overall_stats = calculate_overall_stats(lap_stats)
-    
-    # Generate PDF report
-    os.makedirs(os.path.dirname(pdf_filepath), exist_ok=True)
-    generate_pdf_report(lap_stats, overall_stats, pdf_filepath, race_details)
-    
-    # For races up to 200 yards, add stroke-by-stroke analysis
-    if race_details['distance'].value <= 200 and 'events' in data:
-        # Create stroke-by-stroke analysis PDF
-        create_stroke_by_stroke_analysis(data, race_details, pdf_filepath)
-    
-    print(f"Report generated: {pdf_filepath}")
-
-def create_stroke_by_stroke_analysis(data, race_details, main_pdf_path):
-    """
-    Add stroke-by-stroke analysis to the PDF for races up to 200 yards.
-    """
-    # Create a new PDF path by adding "_stroke_analysis" to the filename
-    stroke_pdf_path = main_pdf_path.replace('.pdf', '_stroke_analysis.pdf')
-    
-    doc = SimpleDocTemplate(
-        stroke_pdf_path, 
-        pagesize=letter,
-        rightMargin=20,
-        leftMargin=20,
-        topMargin=40,
-        bottomMargin=40
-    )
-    elements = []
-    
-    # Add title
-    title_style = ParagraphStyle(
-        'Title',
-        fontSize=12,
-        fontName='Helvetica-Bold',
-        alignment=0,
-        spaceAfter=6
-    )
-    
-    elements.append(Paragraph(f"{race_details['swimmer_name']} - Stroke-by-Stroke Analysis", title_style))
-    elements.append(Spacer(1, 10))
-    
-    # Get events
-    events = data.get('events', [])
-    
-    # Find lap markers based on stroke type
-    lap_markers = [0.0]  # Start with 0 for first lap
-    
-    stroke = race_details['stroke'].value
-    
-    if stroke in ["breaststroke", "butterfly"]:
-        # For breast/fly, use turn_start events
-        lap_markers.extend([e['time'] for e in events if e['type'] == 'turn_start'])
-    elif stroke == "im":
-        # For IM, pattern depends on distance
-        if race_details['distance'].value == 200:
-            # 200 IM: turn_start (fly, back) -> turn_end (breast) -> turn_start (free)
-            turn_events = [(e['time'], e['type']) for e in events if e['type'] in ['turn_start', 'turn_end']]
-            turn_events.sort(key=lambda x: x[0])  # Sort by time
-            
-            # First 2 turns (fly, back) - turn_start
-            lap_markers.extend([t[0] for t in turn_events[:2] if t[1] == 'turn_start'])
-            # Next turn (breast) - turn_end 
-            lap_markers.extend([t[0] for t in turn_events[2:3] if t[1] == 'turn_end'])
-            # Next 3 turns (free) - turn_start
-            lap_markers.extend([t[0] for t in turn_events[3:6] if t[1] == 'turn_start'])
+        # For races up to 200 yards, add stroke-by-stroke analysis
+        print(f"DEBUG in generate_pdf_report: data: {data is not None}")
+        print(f"DEBUG in generate_pdf_report: 'events' in data: {data and 'events' in data}")
+        print(f"DEBUG in generate_pdf_report: distance <= 200: {int(race_details['distance'].value) <= 200}")
+        print(f"DEBUG in generate_pdf_report: Condition check: {data and 'events' in data and int(race_details['distance'].value) <= 200}")
         
-        elif race_details['distance'].value == 400:
-            # 400 IM: turn_start (fly) -> turn_end (back) -> turn_start (breast) -> turn_end (free)
-            turn_events = [(e['time'], e['type']) for e in events if e['type'] in ['turn_start', 'turn_end']]
-            turn_events.sort(key=lambda x: x[0])
-            
-            # First 4 turns (fly) - turn_start
-            lap_markers.extend([t[0] for t in turn_events[:4] if t[1] == 'turn_start'])
-            # Next 3 turns (back) - turn_end
-            lap_markers.extend([t[0] for t in turn_events[4:7] if t[1] == 'turn_end'])
-            # Next 5 turns (breast) - turn_start
-            lap_markers.extend([t[0] for t in turn_events[7:12] if t[1] == 'turn_start'])
-            # Last 3 turns (free) - turn_end
-            lap_markers.extend([t[0] for t in turn_events[12:] if t[1] == 'turn_end'])
-    else:
-        # For freestyle and backstroke, use turn_end events
-        lap_markers.extend([e['time'] for e in events if e['type'] == 'turn_end'])
-    
-    # Add the final time
-    end_time = next((e['time'] for e in events if e['type'] == 'end'), None)
-    if end_time:
-        lap_markers.append(end_time)
-    
-    # Get breakout times if available
-    breakout_times = data.get('breakout_times', None)
-    
-    # Create stroke-by-stroke plots for each lap
-    num_laps = min(len(lap_markers) - 1, 8)  # Up to 8 laps (200 yard race)
-    
-    print(f"Creating stroke analysis for {num_laps} laps")
-    print(f"Lap markers: {lap_markers}")
-    
-    # Generate all plots first
-    all_plots = []
-    for lap in range(num_laps):
-        lap_start = lap_markers[lap]
-        lap_end = lap_markers[lap + 1]
-        
-        print(f"Processing lap {lap+1}: {lap_start} to {lap_end}")
-        
-        # Count strokes in this lap for debugging
-        lap_strokes = [e for e in events 
-                      if e['type'] == 'stroke' 
-                      and lap_start <= e['time'] <= lap_end]
-        print(f"  Found {len(lap_strokes)} strokes in lap {lap+1}")
-        
-        # Create the plot for this lap
-        stroke_plot_buf = create_stroke_by_stroke_plot(events, lap_start, lap_end, lap + 1, breakout_times)
-        
-        # Create a paragraph for the lap title
-        lap_title = Paragraph(f"Lap {lap+1}", title_style)
-        
-        # Create the image
-        stroke_plot_img = Image(stroke_plot_buf, width=250, height=200)
-        
-        # Add both to the list
-        all_plots.append((lap_title, stroke_plot_img))
-    
-    # Now arrange the plots in a grid, 2x2 per page
-    for i in range(0, len(all_plots), 4):
-        # Take up to 4 plots for this page
-        page_plots = all_plots[i:i+4]
-        
-        # Create a table for this page
-        data = []
-        
-        # Add plots to the table, 2 per row
-        for j in range(0, len(page_plots), 2):
-            row_plots = page_plots[j:j+2]
-            row = []
-            
-            for title, img in row_plots:
-                # Create a flowable for each plot (title + image)
-                plot_elements = []
-                plot_elements.append(title)
-                plot_elements.append(img)
-                
-                # Create a container for these elements
-                container = []
-                container.extend(plot_elements)
-                row.append(container)
-            
-            # Pad with empty cells if needed
-            while len(row) < 2:
-                row.append("")
-                
-            data.append(row)
-        
-        # Create the table
-        plot_table = Table(data, colWidths=[275, 275])
-        plot_table.setStyle(TableStyle([
-            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-            ('TOPPADDING', (0, 0), (-1, -1), 10),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 10),
-        ]))
-        
-        elements.append(plot_table)
-        
-        # Add page break if not the last page
-        if i + 4 < len(all_plots):
+        if data and 'events' in data and int(race_details['distance'].value) <= 200:
+            print("DEBUG: Adding stroke-by-stroke analysis")
             elements.append(PageBreak())
+            elements.append(Paragraph("Stroke-by-Stroke Analysis", title_style))
+            elements.append(Spacer(1, 10))
+            
+            try:
+                # Add stroke-by-stroke analysis
+                print("DEBUG: About to call create_stroke_by_stroke_analysis_elements")
+                stroke_analysis_elements = create_stroke_by_stroke_analysis_elements(data, race_details)
+                print(f"DEBUG: Got {len(stroke_analysis_elements)} elements back")
+                elements.extend(stroke_analysis_elements)
+                
+                # Add continuous stroke graph across all laps
+                print("DEBUG: About to call create_continuous_stroke_graph")
+                continuous_stroke_buf = create_continuous_stroke_graph(data, race_details)
+                print("DEBUG: Got continuous stroke graph buffer back")
+                continuous_stroke_img = Image(continuous_stroke_buf, width=500, height=300)
+                elements.append(continuous_stroke_img)
+            except Exception as e:
+                print(f"ERROR in stroke analysis: {str(e)}")
+                import traceback
+                traceback.print_exc()
     
-    # Build the PDF
     doc.build(elements)
-    
-    print(f"Stroke-by-stroke analysis generated: {stroke_pdf_path}")
 
 def main():
     # Example data

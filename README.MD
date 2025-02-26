@@ -60,4 +60,3 @@ Future updates will include:
 
    - make sure graphs display correctly
    - asterisk on 15 to turn only free or back
-   - 
