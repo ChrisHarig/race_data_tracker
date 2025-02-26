@@ -51,3 +51,13 @@ Future updates will include:
 - Race segment breakdowns
 - Visual data representation
 - PDF report generation
+
+### Try -->
+- More metrics (over water speed, ...)
+- graphs of most interesting metrics
+   - per lap graphs of stroke speed at each stroke
+   - cross race graph of under water distance, underwater speed, ...
+
+   - make sure graphs display correctly
+   - asterisk on 15 to turn only free or back
+   - 

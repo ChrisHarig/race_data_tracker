@@ -195,7 +195,7 @@ def make_file_info(race_details, data_type, base_directory):
 
 def parse_race_details():
     """
-    Prompt user for race details and return a dictionary with swimmer's name, gender, distance, stroke, and session.
+    Prompt user for race details and return a dictionary with swimmer's name, gender, distance, stroke, session, and relay status.
     """
     print("\nPlease enter race details:")
     
@@ -213,6 +213,14 @@ def parse_race_details():
             gender = Gender.MEN if gender_input == "m" else Gender.WOMEN
             break
         print("Invalid input. Please enter 'm' for men or 'f' for women.")
+    
+    # Get relay status
+    while True:
+        relay_input = input("Is this a relay? (y/n): ").strip().lower()
+        if relay_input in ['y', 'n']:
+            relay = relay_input == 'y'
+            break
+        print("Invalid input. Please enter 'y' for yes or 'n' for no.")
     
     # Get session
     while True:
@@ -277,7 +285,8 @@ def parse_race_details():
         "gender": gender,
         "distance": distance,
         "stroke": stroke,
-        "session": session
+        "session": session,
+        "relay": relay
     }
 
 def generate_report(race_details, base_directory):
@@ -285,6 +294,25 @@ def generate_report(race_details, base_directory):
     Generate a report for the given race details.
     """
     reporting.run(race_details, base_directory)
+
+def confirm_action(action_description):
+    """
+    Ask the user to confirm an action before proceeding.
+    
+    Args:
+        action_description (str): Description of the action to confirm
+        
+    Returns:
+        bool: True if user confirms, False otherwise
+    """
+    while True:
+        confirm = input(f"Confirm {action_description}? (y/n): ").strip().lower()
+        if confirm == 'y':
+            return True
+        elif confirm == 'n':
+            return False
+        else:
+            print("Please enter 'y' for yes or 'n' for no.")
 
 def main():
     race_details = None
@@ -312,6 +340,22 @@ def main():
                 race_details = parse_race_details()
                 base_directory = input("Enter the base directory for saving data (e.g., 'user_dir_1/user_sub_dir_1'/...): ").strip()
                 base_directory = os.path.join("data", base_directory)
+                
+                # Confirm race details after entry
+                print("\nRace details:", 
+                      f"\nSwimmer: {race_details['swimmer_name']}"
+                      f"\nGender: {race_details['gender'].value}"
+                      f"\nRelay: {'Yes' if race_details.get('relay', False) else 'No'}"
+                      f"\nDistance: {race_details['distance'].value}"
+                      f"\nStroke: {race_details['stroke'].value}"
+                      f"\nSession: {race_details['session'].value}"
+                      f"\nDirectory: {base_directory}")
+                
+                if not confirm_action("these race details"):
+                    race_details = None
+                    print("Race details cancelled. Returning to main menu.")
+                    continue
+                
             except ValueError as e:
                 print(f"Error: {e}")
                 continue
@@ -320,6 +364,7 @@ def main():
             print("\nPrevious race details:", 
                   f"\nSwimmer: {race_details['swimmer_name']}"
                   f"\nGender: {race_details['gender'].value}"
+                  f"\nRelay: {'Yes' if race_details.get('relay', False) else 'No'}"
                   f"\nDistance: {race_details['distance'].value}"
                   f"\nStroke: {race_details['stroke'].value}"
                   f"\nSession: {race_details['session'].value}")
@@ -348,15 +393,25 @@ def main():
             if action == "1":
                 print("\n--- Race Event Recording ---")
                 record_race_strokes_and_turns(race_details, base_directory)
+                # Confirm after recording is complete
+                if confirm_action("save this race recording"):
+                    print("\nRace recording saved successfully!")
+                else:
+                    print("Race recording discarded.")
+                    # Here you might want to add code to delete the saved file
             elif action == "2":
                 print("\n--- Manual Data Entry ---")
                 enter_break_and_fifteen_data(race_details, base_directory)
+                # Confirm after data entry is complete
+                if confirm_action("save this breakout and 15m data"):
+                    print("\nBreakout and 15m data saved successfully!")
+                else:
+                    print("Breakout and 15m data discarded.")
+                    # Here you might want to add code to delete the saved file
             elif action == "3":
                 print("\n--- Generating Report ---")
                 generate_report(race_details, base_directory)
-            
-            # After successful completion, ask what they want to do next
-            print("\nAction completed successfully!")
+                print("\nReport generated successfully!")
             
         except Exception as e:
             print(f"\nError occurred: {str(e)}")
