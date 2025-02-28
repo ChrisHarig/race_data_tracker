@@ -16,9 +16,10 @@ def calculate_per_lap_stats(data, race_details):
     """
     Calculate statistics for each lap from the event data and breakout/fifteen data.
     All measurements are in yards for consistency.
+    Handles cases where breakout/fifteen data might be missing.
     """
-    stroke = race_details['stroke']
-    distance = race_details['distance']
+    stroke = race_details['stroke'].value
+    distance = race_details['distance'].value
     lap_stats = []
     
     # Get the events from stroke_and_turn data
@@ -28,6 +29,9 @@ def calculate_per_lap_stats(data, race_details):
     breakout_data = data.get('breakout_times', None)
     breakout_distances = data.get('breakout_distances', None)
     fifteen_times = data.get('fifteen_times', None)
+    
+    # Check if we have complete breakout/fifteen data
+    has_breakout_data = all(x is not None for x in [breakout_data, breakout_distances, fifteen_times])
     
     # Find all turn_end events to determine laps (these mark the end of each lap)
     lap_markers = [0.0]  # Start with 0 for first lap
@@ -73,6 +77,9 @@ def calculate_per_lap_stats(data, race_details):
     
     num_laps = len(lap_markers) - 1  # Number of laps is one less than number of markers
     
+    # Check if this is freestyle or backstroke (no turn time)
+    is_free_or_back = stroke in ["freestyle", "backstroke"]
+    
     for lap in range(num_laps):
         lap_stat = {"Lap": lap + 1}
         
@@ -95,12 +102,16 @@ def calculate_per_lap_stats(data, race_details):
             next_turn = min((t['time'] for t in lap_turns if t['time'] > last_stroke), default=lap_end)
             lap_stat["Stroke to Wall"] = round(next_turn - last_stroke, 2)
         
-        # Calculate turn time only if we have both start and end
-        turn_start = next((t for t in lap_turns if t['type'] == 'turn_start'), None)
-        turn_end = next((t for t in lap_turns if t['type'] == 'turn_end'), None)
-        
-        if turn_start and turn_end:
-            lap_stat["Turn Time"] = round(turn_end['time'] - turn_start['time'], 2)
+        # Calculate turn time only if we have both start and end and it's not freestyle/backstroke
+        if not is_free_or_back:
+            turn_start = next((t for t in lap_turns if t['type'] == 'turn_start'), None)
+            turn_end = next((t for t in lap_turns if t['type'] == 'turn_end'), None)
+            
+            if turn_start and turn_end:
+                lap_stat["Turn Time"] = round(turn_end['time'] - turn_start['time'], 2)
+        else:
+            # For freestyle/backstroke, set turn time to 0.0
+            lap_stat["Turn Time"] = 0.0
         
         # Count strokes in this lap
         strokes = len(lap_strokes)
@@ -115,37 +126,36 @@ def calculate_per_lap_stats(data, race_details):
             })
         
         # Add breakout and 15m data if available
-        if all(x is not None for x in [breakout_data, breakout_distances, fifteen_times]):
-            if lap < len(breakout_data):  # Check if we have data for this lap
-                # Find the most recent turn_end or start event
-                if lap == 0:
-                    # For first lap, use the start time (0.0)
-                    previous_turn_end = 0.0
-                else:
-                    # For subsequent laps, use the previous lap marker
-                    previous_turn_end = lap_markers[lap]
-                
-                # Calculate breakout time relative to the turn end
-                relative_breakout_time = breakout_data[lap] - previous_turn_end
-                
-                # Breakout distance is already in yards (user input)
-                breakout_yards = breakout_distances[lap]
-                
-                # Calculate underwater speed in yards per second
-                underwater_speed = breakout_yards / relative_breakout_time if relative_breakout_time > 0 else 0
-                
-                # Calculate breakout to 15m time
-                # Note: 15m mark is at 16.4042 yards but we keep the name "15m" for reference
-                breakout_to_fifteen = fifteen_times[lap] - breakout_data[lap]
-                
-                lap_stat.update({
-                    "Breakout Time": round(relative_breakout_time, 2),  # Relative to turn end
-                    "Breakout Dist": round(breakout_yards, 2),          # Already in yards
-                    "UW Speed": round(underwater_speed, 2),             # Yards/sec
-                    "Break->15": round(breakout_to_fifteen, 2),
-                    "15->Turn": round(lap_end - fifteen_times[lap], 2),
-                    "Turn Time": round(lap_stat.get("Turn Time", 0), 2)
-                })
+        if has_breakout_data and lap < len(breakout_data):
+            # Find the most recent turn_end or start event
+            if lap == 0:
+                # For first lap, use the start time (0.0)
+                previous_turn_end = 0.0
+            else:
+                # For subsequent laps, use the previous lap marker
+                previous_turn_end = lap_markers[lap]
+            
+            # Calculate breakout time relative to the turn end
+            relative_breakout_time = breakout_data[lap] - previous_turn_end
+            
+            # Breakout distance is already in yards (user input)
+            breakout_yards = breakout_distances[lap]
+            
+            # Calculate underwater speed in yards per second
+            underwater_speed = breakout_yards / relative_breakout_time if relative_breakout_time > 0 else 0
+            
+            # Calculate breakout to 15m time
+            # Note: 15m mark is at 16.4042 yards but we keep the name "15m" for reference
+            breakout_to_fifteen = fifteen_times[lap] - breakout_data[lap]
+            
+            lap_stat.update({
+                "Breakout Time": round(relative_breakout_time, 2),
+                "Breakout Dist": round(breakout_yards, 2),
+                "UW Speed": round(underwater_speed, 2),
+                "Break->15": round(breakout_to_fifteen, 2),
+                "15->Turn": round(lap_end - fifteen_times[lap], 2),
+                "Turn Time": round(lap_stat.get("Turn Time", 0), 2)
+            })
         
         lap_stats.append(lap_stat)
     
@@ -327,47 +337,111 @@ def create_combined_metrics_plot(lap_stats):
 def create_race_metrics_plots(lap_stats):
     """
     Create two plots side by side: underwater speed and stroke rate across the race.
+    Handles cases where underwater speed data might be missing.
     """
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 5))
+    # Check if we have underwater speed data
+    has_uw_data = 'UW Speed' in lap_stats.columns and not lap_stats['UW Speed'].isna().all()
+    has_stroke_data = 'Strokes per Second' in lap_stats.columns and not lap_stats['Strokes per Second'].isna().all()
     
-    # Filter out rows with missing data
-    valid_uw_data = lap_stats.dropna(subset=['UW Speed'])
-    valid_strk_data = lap_stats.dropna(subset=['Strokes per Second'])
+    if has_uw_data and has_stroke_data:
+        # Create side-by-side plots if we have both types of data
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 5))
+        
+        # Filter out rows with missing data
+        valid_uw_data = lap_stats.dropna(subset=['UW Speed'])
+        valid_strk_data = lap_stats.dropna(subset=['Strokes per Second'])
+        
+        # Plot underwater speed
+        ax1.plot(valid_uw_data['Lap'], valid_uw_data['UW Speed'], 
+                marker='o', linestyle='-', color='red', linewidth=2, markersize=8)
+        
+        # Add data labels for underwater speed
+        for i, row in valid_uw_data.iterrows():
+            ax1.annotate(f"{row['UW Speed']}", 
+                        (row['Lap'], row['UW Speed']),
+                        xytext=(0, 5), textcoords='offset points',
+                        ha='center')
+        
+        # Plot stroke rate
+        ax2.plot(valid_strk_data['Lap'], valid_strk_data['Strokes per Second'], 
+                marker='o', linestyle='-', color='blue', linewidth=2, markersize=8)
+        
+        # Add data labels for stroke rate
+        for i, row in valid_strk_data.iterrows():
+            ax2.annotate(f"{row['Strokes per Second']}", 
+                        (row['Lap'], row['Strokes per Second']),
+                        xytext=(0, 5), textcoords='offset points',
+                        ha='center')
+        
+        # Set titles and labels
+        ax1.set_title('Underwater Speed by Lap')
+        ax1.set_xlabel('Lap')
+        ax1.set_ylabel('Underwater Speed (yards/second)')
+        ax1.grid(True, alpha=0.3)
+        ax1.set_xticks(lap_stats['Lap'])
+        
+        ax2.set_title('Stroke Rate by Lap')
+        ax2.set_xlabel('Lap')
+        ax2.set_ylabel('Stroke Rate (strokes/second)')
+        ax2.grid(True, alpha=0.3)
+        ax2.set_xticks(lap_stats['Lap'])
     
-    # Plot underwater speed
-    ax1.plot(valid_uw_data['Lap'], valid_uw_data['UW Speed'], 
-             marker='o', linestyle='-', color='red', linewidth=2, markersize=8)
+    elif has_stroke_data:
+        # Create only stroke rate plot if that's all we have
+        fig, ax = plt.subplots(figsize=(8, 5))
+        
+        # Filter out rows with missing data
+        valid_strk_data = lap_stats.dropna(subset=['Strokes per Second'])
+        
+        # Plot stroke rate
+        ax.plot(valid_strk_data['Lap'], valid_strk_data['Strokes per Second'], 
+               marker='o', linestyle='-', color='blue', linewidth=2, markersize=8)
+        
+        # Add data labels for stroke rate
+        for i, row in valid_strk_data.iterrows():
+            ax.annotate(f"{row['Strokes per Second']}", 
+                      (row['Lap'], row['Strokes per Second']),
+                      xytext=(0, 5), textcoords='offset points',
+                      ha='center')
+        
+        # Set titles and labels
+        ax.set_title('Stroke Rate by Lap')
+        ax.set_xlabel('Lap')
+        ax.set_ylabel('Stroke Rate (strokes/second)')
+        ax.grid(True, alpha=0.3)
+        ax.set_xticks(lap_stats['Lap'])
     
-    # Add data labels for underwater speed
-    for i, row in valid_uw_data.iterrows():
-        ax1.annotate(f"{row['UW Speed']}", 
-                    (row['Lap'], row['UW Speed']),
-                    xytext=(0, 5), textcoords='offset points',
-                    ha='center')
+    elif has_uw_data:
+        # Create only underwater speed plot if that's all we have
+        fig, ax = plt.subplots(figsize=(8, 5))
+        
+        # Filter out rows with missing data
+        valid_uw_data = lap_stats.dropna(subset=['UW Speed'])
+        
+        # Plot underwater speed
+        ax.plot(valid_uw_data['Lap'], valid_uw_data['UW Speed'], 
+               marker='o', linestyle='-', color='red', linewidth=2, markersize=8)
+        
+        # Add data labels for underwater speed
+        for i, row in valid_uw_data.iterrows():
+            ax.annotate(f"{row['UW Speed']}", 
+                      (row['Lap'], row['UW Speed']),
+                      xytext=(0, 5), textcoords='offset points',
+                      ha='center')
+        
+        # Set titles and labels
+        ax.set_title('Underwater Speed by Lap')
+        ax.set_xlabel('Lap')
+        ax.set_ylabel('Underwater Speed (yards/second)')
+        ax.grid(True, alpha=0.3)
+        ax.set_xticks(lap_stats['Lap'])
     
-    # Plot stroke rate
-    ax2.plot(valid_strk_data['Lap'], valid_strk_data['Strokes per Second'], 
-             marker='o', linestyle='-', color='blue', linewidth=2, markersize=8)
-    
-    # Add data labels for stroke rate
-    for i, row in valid_strk_data.iterrows():
-        ax2.annotate(f"{row['Strokes per Second']}", 
-                    (row['Lap'], row['Strokes per Second']),
-                    xytext=(0, 5), textcoords='offset points',
-                    ha='center')
-    
-    # Set titles and labels
-    ax1.set_title('Underwater Speed by Lap')
-    ax1.set_xlabel('Lap')
-    ax1.set_ylabel('Underwater Speed (yards/second)')
-    ax1.grid(True, alpha=0.3)
-    ax1.set_xticks(lap_stats['Lap'])
-    
-    ax2.set_title('Stroke Rate by Lap')
-    ax2.set_xlabel('Lap')
-    ax2.set_ylabel('Stroke Rate (strokes/second)')
-    ax2.grid(True, alpha=0.3)
-    ax2.set_xticks(lap_stats['Lap'])
+    else:
+        # Create an empty plot with a message if we have neither
+        fig, ax = plt.subplots(figsize=(8, 5))
+        ax.text(0.5, 0.5, 'No metrics data available', 
+               ha='center', va='center', transform=ax.transAxes, fontsize=14)
+        ax.axis('off')
     
     plt.tight_layout()
     
@@ -478,6 +552,22 @@ def create_continuous_stroke_graph(data, race_details):
     
     # Get events
     events = data.get('events', [])
+    
+    # If no events, return an empty plot
+    if not events:
+        plt.title('Continuous Stroke Rate Analysis')
+        plt.xlabel('Stroke Number')
+        plt.ylabel('Stroke Rate (strokes/second)')
+        plt.grid(True, alpha=0.3)
+        plt.text(0.5, 0.5, 'No stroke data available', 
+                ha='center', va='center', transform=plt.gca().transAxes, fontsize=14)
+        
+        # Save to bytes buffer
+        buf = io.BytesIO()
+        plt.savefig(buf, format='png', dpi=100, bbox_inches='tight')
+        plt.close()
+        buf.seek(0)
+        return buf
     
     # Find lap markers based on stroke type
     lap_markers = [0.0]  # Start with 0 for first lap
@@ -847,13 +937,7 @@ def generate_pdf_report(lap_stats, overall_stats, filepath, race_details, data=N
     """
     Generate a PDF report with all statistics in a single compact table.
     All speeds and distances are in yards/second and yards respectively.
-    
-    Parameters:
-        lap_stats: DataFrame with lap statistics
-        overall_stats: Dictionary with overall statistics
-        filepath: Path to save the PDF
-        race_details: Dictionary with race details
-        data: Dictionary with raw data including events
+    Handles cases where breakout/fifteen data might be missing.
     """
     doc = SimpleDocTemplate(
         filepath, 
@@ -902,11 +986,33 @@ def generate_pdf_report(lap_stats, overall_stats, filepath, race_details, data=N
     elements.append(Spacer(1, 5))  # Reduced spacer after all header info
     
     if not lap_stats.empty:
-        # Combined columns for all statistics in new order
-        columns = [
-            "Lap", "Break Time", "Break->15", "15->Turn", "Strk->Wall",
-            "Turn Time", "Lap Time", "Break Dist", "UW Speed", "Strk Count", "Strk/Sec"
-        ]
+        # Determine which columns we have data for
+        has_breakout_data = 'Breakout Time' in lap_stats.columns and not lap_stats['Breakout Time'].isna().all()
+        
+        # Check if this is freestyle or backstroke (no turn time)
+        is_free_or_back = race_details['stroke'].value in ["freestyle", "backstroke"]
+        
+        # Define columns based on available data
+        if has_breakout_data:
+            if is_free_or_back:
+                columns = [
+                    "Lap", "Break Time", "Break->15", "15->Turn", "Strk->Wall",
+                    "Lap Time", "Break Dist", "UW Speed", "Strk Count", "Strk/Sec"
+                ]
+            else:
+                columns = [
+                    "Lap", "Break Time", "Break->15", "15->Turn", "Strk->Wall",
+                    "Turn Time", "Lap Time", "Break Dist", "UW Speed", "Strk Count", "Strk/Sec"
+                ]
+        else:
+            if is_free_or_back:
+                columns = [
+                    "Lap", "Strk->Wall", "Lap Time", "Strk Count", "Strk/Sec"
+                ]
+            else:
+                columns = [
+                    "Lap", "Strk->Wall", "Turn Time", "Lap Time", "Strk Count", "Strk/Sec"
+                ]
         
         # Format integers, ignoring NaN values
         lap_stats["Lap"] = lap_stats["Lap"].fillna(0).astype(int)
@@ -921,20 +1027,53 @@ def generate_pdf_report(lap_stats, overall_stats, filepath, race_details, data=N
         for _, row in lap_stats.iterrows():
             lap_num = int(row["Lap"])
             
-            # Prepare data row
-            data_row = [
-                lap_num,
-                row.get("Breakout Time", ""),
-                row.get("Break->15", ""),
-                row.get("15->Turn", ""),
-                row.get("Stroke to Wall", ""),
-                row.get("Turn Time", ""),
-                row.get("Lap Time", ""),
-                row.get("Breakout Dist", ""),
-                row.get("UW Speed", ""),
-                int(row.get("Stroke Count", 0)) if pd.notna(row.get("Stroke Count")) else "",
-                row.get("Strokes per Second", "")
-            ]
+            # Prepare data row based on available columns and stroke type
+            if has_breakout_data:
+                if is_free_or_back:
+                    data_row = [
+                        lap_num,
+                        row.get("Breakout Time", ""),
+                        row.get("Break->15", ""),
+                        row.get("15->Turn", ""),
+                        row.get("Stroke to Wall", ""),
+                        row.get("Lap Time", ""),
+                        row.get("Breakout Dist", ""),
+                        row.get("UW Speed", ""),
+                        int(row.get("Stroke Count", 0)) if pd.notna(row.get("Stroke Count")) else "",
+                        row.get("Strokes per Second", "")
+                    ]
+                else:
+                    data_row = [
+                        lap_num,
+                        row.get("Breakout Time", ""),
+                        row.get("Break->15", ""),
+                        row.get("15->Turn", ""),
+                        row.get("Stroke to Wall", ""),
+                        row.get("Turn Time", ""),
+                        row.get("Lap Time", ""),
+                        row.get("Breakout Dist", ""),
+                        row.get("UW Speed", ""),
+                        int(row.get("Stroke Count", 0)) if pd.notna(row.get("Stroke Count")) else "",
+                        row.get("Strokes per Second", "")
+                    ]
+            else:
+                if is_free_or_back:
+                    data_row = [
+                        lap_num,
+                        row.get("Stroke to Wall", ""),
+                        row.get("Lap Time", ""),
+                        int(row.get("Stroke Count", 0)) if pd.notna(row.get("Stroke Count")) else "",
+                        row.get("Strokes per Second", "")
+                    ]
+                else:
+                    data_row = [
+                        lap_num,
+                        row.get("Stroke to Wall", ""),
+                        row.get("Turn Time", ""),
+                        row.get("Lap Time", ""),
+                        int(row.get("Stroke Count", 0)) if pd.notna(row.get("Stroke Count")) else "",
+                        row.get("Strokes per Second", "")
+                    ]
             
             # Add asterisks to specific cells
             if lap_num == 1:
@@ -973,7 +1112,7 @@ def generate_pdf_report(lap_stats, overall_stats, filepath, race_details, data=N
         
         data_table.append(avg_row)
         
-        # Calculate column widths to fit on page
+        # Calculate column widths based on number of columns
         available_width = 572  # letter width (612) - margins (40)
         col_widths = [25]  # Lap column
         remaining_cols = len(columns) - 1
