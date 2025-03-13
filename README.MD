@@ -54,9 +54,5 @@ Future updates will include:
 
 ### Try -->
 - More metrics (over water speed, ...)
-- graphs of most interesting metrics
-   - per lap graphs of stroke speed at each stroke
-   - cross race graph of under water distance, underwater speed, ...
-
-   - make sure graphs display correctly
-   - asterisk on 15 to turn only free or back
+- graph over water speed next to underwater speed
+- change asterisk locations

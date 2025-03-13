@@ -293,6 +293,7 @@ def generate_report(race_details, base_directory):
     """
     Generate a report for the given race details.
     """
+    print(f"DEBUG: Generating report for base directory: {base_directory} (in generate_report function)")
     reporting.run(race_details, base_directory)
 
 def confirm_action(action_description):
@@ -325,16 +326,50 @@ def main():
             print("1. Record a Race")
             print("2. Enter breakout and 15 meter data")
             print("3. Generate a Report")
-            print("4. Exit")
-            action = input("Enter choice (1-4): ").strip()
+            print("4. Generate Batch Reports")
+            print("5. Exit")
+            action = input("Enter choice (1-5): ").strip()
             
-            if action == "4":
+            if action == "5":
                 print("Goodbye!")
                 break
                 
-            if action not in ["1", "2", "3"]:
-                print("Invalid choice. Please enter 1, 2, 3, or 4.")
+            if action not in ["1", "2", "3", "4"]:
+                print("Invalid choice. Please enter 1, 2, 3, 4, or 5.")
                 continue
+            
+            # For batch reports, we don't need race details
+            if action == "4":
+                try:
+                    base_directory = input("Enter the base directory for data (e.g., 'user_dir_1/user_sub_dir_1'/...): ").strip()
+                    
+                    # Ask if user wants to filter by session
+                    filter_by_session = input("Filter by session? (y/n): ").strip().lower() == 'y'
+                    session_filter = None
+                    
+                    if filter_by_session:
+                        session_input = input("Prelims or Finals? (p/f): ").strip().lower()
+                        if session_input == 'p':
+                            session_filter = "prelims"
+                        elif session_input == 'f':
+                            session_filter = "finals"
+                        else:
+                            print("Invalid session. Processing all sessions.")
+                    
+                    # Confirm before proceeding
+                    print(f"\nGenerating reports for directory: {base_directory}")
+                    if session_filter:
+                        print(f"Session filter: {session_filter}")
+                    
+                    if confirm_action("generate batch reports"):
+                        reporting.generate_batch_reports(base_directory, session_filter)
+                    else:
+                        print("Batch report generation cancelled.")
+                    
+                    continue
+                except Exception as e:
+                    print(f"Error in batch report generation: {str(e)}")
+                    continue
             
             try:
                 race_details = parse_race_details()
@@ -373,7 +408,7 @@ def main():
             print("1. Record a Race")
             print("2. Enter breakout and 15 meter data")
             print("3. Generate a Report")
-            print("4. Start new race details")
+            print("4. Generate Batch Reports")
             print("5. Exit")
             action = input("Enter choice (1-5): ").strip()
             
@@ -382,8 +417,36 @@ def main():
                 break
             
             if action == "4":
-                race_details = None
-                continue
+                try:
+                    base_directory = input("Enter the base directory for data (e.g., 'user_dir_1/user_sub_dir_1'/...): ").strip()
+                    
+                    # Ask if user wants to filter by session
+                    filter_by_session = input("Filter by session? (y/n): ").strip().lower() == 'y'
+                    session_filter = None
+                    
+                    if filter_by_session:
+                        session_input = input("Prelims or Finals? (p/f): ").strip().lower()
+                        if session_input == 'p':
+                            session_filter = "prelims"
+                        elif session_input == 'f':
+                            session_filter = "finals"
+                        else:
+                            print("Invalid session. Processing all sessions.")
+                    
+                    # Confirm before proceeding
+                    print(f"\nGenerating reports for directory: {base_directory}")
+                    if session_filter:
+                        print(f"Session filter: {session_filter}")
+                    
+                    if confirm_action("generate batch reports"):
+                        reporting.generate_batch_reports(base_directory, session_filter)
+                    else:
+                        print("Batch report generation cancelled.")
+                    
+                    continue
+                except Exception as e:
+                    print(f"Error in batch report generation: {str(e)}")
+                    continue
                 
             if action not in ["1", "2", "3"]:
                 print("Invalid choice. Please enter 1, 2, 3, 4, or 5.")
